@@ -1,0 +1,6 @@
+kitteng2p
+
+This repository contains independently authored interoperability code for the public KittenTTS
+v0.8 frontend contract. It does not redistribute KittenTTS model weights or voice assets.
+
+The KittenTTS project and models remain subject to their upstream licenses and attribution.

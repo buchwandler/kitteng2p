@@ -1,0 +1,24 @@
+schema_version = 3
+
+[project]
+uuid = "70f3e096-e429-4e92-a782-995807e63179"
+name = "kitteng2p"
+
+[ledgers.taskledger.mounts.data]
+storage = "external"
+root = "../ledger"
+
+[ledgers.taskledger.mounts.runtime]
+storage = "user-data"
+
+[ledgers.taskledger.mounts.logs]
+storage = "user-data"
+
+[ledgers.taskledger.mounts.indexes]
+storage = "cache"
+
+[ledgers.releaseledger.mounts.data]
+storage = "project"
+
+[ledgers.releaseledger.mounts.indexes]
+storage = "cache"
