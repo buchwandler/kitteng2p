@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 from ..errors import BackendUnavailableError, PhonemizationError
 
@@ -39,7 +39,7 @@ class EspeakBackend:
             ) from exc
         try:
             self._runtime = EspeakRuntime(
-                mode=self.mode,
+                mode=cast(Literal["auto", "native", "cli"], self.mode),
                 executable=self.executable,
                 library=self.library,
                 data=self.data,
