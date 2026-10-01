@@ -15,7 +15,7 @@ from .codec import (
 )
 from .config import KittenG2PConfig
 from .errors import BackendUnavailableError, KittenG2PError, PhonemizationError
-from .types import CodecResult, PhonemizeResult
+from .types import PhonemizeResult
 
 try:
     __version__ = _distribution_version("kitteng2p")
@@ -25,7 +25,6 @@ except PackageNotFoundError:
 __all__ = [
     "__version__",
     "BackendUnavailableError",
-    "CodecResult",
     "FRAME_PREFIX_ID",
     "FRAME_SUFFIX_IDS",
     "KittenG2P",

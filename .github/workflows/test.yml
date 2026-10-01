@@ -21,5 +21,25 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest
-      - run: python -m ruff check kitteng2p tests
+      - run: python -m ruff check kitteng2p tests examples
       - run: python -m build
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev,docs]"
+      - run: python -m pytest
+      - run: python -m ruff check kitteng2p tests examples
+      - run: python -m mypy kitteng2p
+      - run: python -m compileall -q kitteng2p tests tools examples
+      - run: python docs/make.py html
+      - run: python -m build --sdist --wheel
+      - run: python tools/check_release_artifacts.py dist
+      - run: python -m twine check dist/*

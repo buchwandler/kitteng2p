@@ -1,51 +1,33 @@
 # kitteng2p
 
-Independent KittenTTS-compatible phoneme and token-ID frontend.
+Independent phoneme and token-ID frontend targeting the public KittenTTS v0.8
+text-cleaner contract.
 
-This repository follows the same packaging conventions as `piperg2p`:
+`kitteng2p` turns prepared, speakable text into eSpeak phonemes, Kitten-prepared
+phoneme text, character IDs, and model framing `(0, *ids, 10, 0)`. It does not
+synthesize audio, load ONNX models, download voices, or perform written-to-spoken
+semantic normalization. Callers prepare dates, currencies, units, URLs, and
+abbreviations before phonemization.
 
-```text
-pyproject.toml
-kitteng2p/
-tests/
-docs/
+The package has a flat layout and uses `setuptools-scm` for dynamic versioning.
+
+## Installation
+
+Install `kitteng2p` and make a system eSpeak or eSpeak NG runtime available to
+`espeakng-runtime`:
+
+```console
+python -m pip install kitteng2p
 ```
 
-There is **no `src/` layer**. Versioning is dynamic through Git tags and `setuptools-scm`.
+Where supported, install the optional bundled runtime assets instead:
 
-## Scope
-
-`kitteng2p` owns:
-
-```text
-prepared English text
-  -> eSpeak NG IPA
-  -> Kitten basic-English phoneme tokenization
-  -> Kitten v0.8 character IDs
-  -> upstream-compatible framing: [0] + ids + [10, 0]
+```console
+python -m pip install "kitteng2p[bundled]"
 ```
 
-It does **not**:
-
-- synthesize audio;
-- load ONNX models;
-- download voices;
-- normalize written semantics such as currencies/dates/URLs;
-- depend on `onnxvoice` or `kittensynth`.
-
-That semantic boundary intentionally matches `piperg2p`: callers pass already speakable text.
-
-## Install
-
-```bash
-pip install kitteng2p
-```
-
-For the optional bundled eSpeak loader:
-
-```bash
-pip install "kitteng2p[bundled]"
-```
+The `bundled` extra provisions eSpeak runtime assets where supported. It does
+not install KittenTTS, a TTS model, or audio dependencies.
 
 ## Quick start
 
@@ -54,74 +36,70 @@ from kitteng2p import KittenG2P
 
 with KittenG2P() as g2p:
     result = g2p.phonemize_prepared("Hello, world.")
-    print(result.phonemes)
-    print(result.token_ids)
+
+print(result.phonemes)
+print(result.token_ids)
+print(result.dropped_symbols)
 ```
 
-Convenience API:
+The result's `token_ids` already include model framing. The convenience
+functions `phonemes()` and `phoneme_ids()` create and close a temporary frontend.
 
-```python
-from kitteng2p import phoneme_ids, phonemes
+## Command line
 
-print(phonemes("Hello world"))
-print(phoneme_ids("Hello world"))
+```console
+kitteng2p "Hello, world."
+kitteng2p --language en-gb "Hello, world."
+kitteng2p --espeak-mode cli "Hello, world."
 ```
 
-## Kitten v0.8 compatibility
+The command prints one JSON object with the original text, prepared phonemes,
+framed token IDs, and any dropped symbols.
 
-The codec is derived from the public KittenTTS v0.8 `TextCleaner` contract:
+## Kitten v0.8 compatibility target
 
-- identical `$` pad symbol;
-- identical punctuation string;
-- identical ASCII letter set;
-- identical IPA symbol inventory;
-- duplicate symbols retain the **last** upstream dictionary index;
-- unknown characters are dropped, matching upstream behavior;
-- model framing is `(0, *ids, 10, 0)`.
+`kitteng2p` reproduces the public KittenTTS v0.8 text-cleaner symbol inventory
+and model-ID framing:
 
-The default backend uses `espeakng-runtime`, which centralizes native/CLI discovery. A backend can
-be injected for deterministic compatibility tests.
+- the same pad, punctuation, ASCII-letter, and IPA symbol inventory;
+- duplicate symbols use the last dictionary index, matching upstream construction;
+- symbols outside the inventory are dropped;
+- model IDs are framed as `(0, *ids, 10, 0)`.
+
+This is a codec-level compatibility claim. The released KittenTTS 0.8.1 path
+uses `phonemizer` around eSpeak, while `kitteng2p` uses `espeakng-runtime`.
+Exact sentence-level ID parity has not been established across a representative
+corpus. Do not interpret codec compatibility as end-to-end phonemizer parity.
+See the [compatibility policy](docs/compatibility.md).
+
+## Documentation
+
+- [Installation](docs/installation.md)
+- [Quick start](docs/quickstart.md)
+- [API reference](docs/api.md)
+- [Codec contract](docs/codec.md)
+- [eSpeak backend](docs/backends.md)
+- [Command line](docs/cli.md)
+- [Compatibility policy](docs/compatibility.md)
+- [Architecture](docs/architecture.md)
+- [Changelog](docs/changelog.md)
+- [Runnable examples](examples/README.md)
 
 ## Dynamic versioning
 
-Versions come from Git tags:
-
-```bash
-git tag v0.1.0
-python -m build
-```
-
-`pyproject.toml` uses:
-
-```toml
-dynamic = ["version"]
-```
-
-and `setuptools-scm`. Source zips without `.git` metadata fall back to `0.1.dev0` so the MVP remains
-buildable before it is committed.
-
-At runtime:
-
-```python
-import kitteng2p
-print(kitteng2p.__version__)
-```
-
-reads installed distribution metadata, like `piperg2p`.
+Package versions are derived from Git tags through `setuptools-scm`. Source
+archives without Git metadata use the configured `0.1.dev0` fallback. Create a
+release tag only after the release checklist and artifact gates have passed.
+At runtime, `kitteng2p.__version__` reports the installed distribution version.
 
 ## Development
 
-```bash
-python -m pip install -e ".[dev]"
+```console
+python -m pip install -e ".[dev,docs]"
 python -m pytest
-python -m ruff check kitteng2p tests
+python -m ruff check kitteng2p tests examples
 python -m mypy kitteng2p
-python -m build
+python -m compileall -q kitteng2p tests tools examples
+python docs/make.py html
+python -m build --sdist --wheel
 ```
-
-## MVP follow-up
-
-Before calling the implementation "exact upstream parity", add a golden suite that runs the same
-sentences through the released KittenTTS 0.8.1 `phonemizer` path and this `espeakng-runtime` path,
-then compares the final framed token IDs. The package API is designed so that parity fixes remain
-inside the backend/codec boundary.

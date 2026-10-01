@@ -7,12 +7,13 @@ from .api import KittenG2P
 from .config import KittenG2PConfig
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Run the command-line frontend with optional argument injection for tests."""
     parser = argparse.ArgumentParser(description="Prepare KittenTTS v0.8 phonemes and token IDs")
     parser.add_argument("text")
     parser.add_argument("--language", default="en-us")
     parser.add_argument("--espeak-mode", choices=["auto", "native", "cli"], default="auto")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     config = KittenG2PConfig(language=args.language, espeak_mode=args.espeak_mode)
     with KittenG2P(config) as g2p:

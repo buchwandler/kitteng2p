@@ -1,0 +1,14 @@
+prune .ledger
+prune .repairledger
+prune .taskledger
+prune .pytest_cache
+prune .ruff_cache
+prune .mypy_cache
+prune .venv
+prune build
+prune dist
+include docs/Makefile
+recursive-include docs *.md *.py *.txt *.bat
+recursive-include examples *.py *.md
+prune docs/_build
+global-exclude *.py[cod]

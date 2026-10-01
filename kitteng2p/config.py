@@ -5,6 +5,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class KittenG2PConfig:
+    """Configure language selection and the eSpeak runtime.
+
+    Parameters
+    ----------
+    language:
+        eSpeak voice or language selector. Defaults to ``"en-us"``.
+    espeak_mode:
+        Runtime selection: ``"auto"``, ``"native"``, or ``"cli"``.
+    executable:
+        Optional explicit eSpeak command-line executable path.
+    library:
+        Optional explicit eSpeak shared-library path.
+    data:
+        Optional explicit eSpeak data directory.
+    timeout:
+        Optional positive runtime timeout in seconds.
+    """
+
     language: str = "en-us"
     espeak_mode: str = "auto"
     executable: str | None = None

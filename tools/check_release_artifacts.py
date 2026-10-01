@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import tarfile
 import zipfile
 from email.parser import Parser
@@ -13,6 +14,8 @@ from packaging.requirements import Requirement
 PACKAGE = "kitteng2p"
 DISTRIBUTION = "kitteng2p"
 FORBIDDEN = frozenset({"kittensynth", "phonemizer", "onnxvoice", "numpy"})
+EXPECTED_PYTHON = ">=3.10"
+EXPECTED_CONSOLE_SCRIPT = "kitteng2p.__main__:main"
 
 
 def _wheel_metadata(path: Path) -> str:
@@ -49,10 +52,36 @@ def _sdist_version(path: Path) -> str:
 def _check_wheel(path: Path) -> str:
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-    if not any(name.startswith(PACKAGE + "/") and name.endswith(".py") for name in names):
-        raise SystemExit(f"wheel does not contain {PACKAGE} Python files")
-    if any(name.startswith(("tests/", "docs/", ".github/")) for name in names):
-        raise SystemExit("wheel contains development-only directories")
+        if not any(name.startswith(PACKAGE + "/") and name.endswith(".py") for name in names):
+            raise SystemExit(f"wheel does not contain {PACKAGE} Python files")
+        if f"{PACKAGE}/py.typed" not in names:
+            raise SystemExit(f"wheel does not contain {PACKAGE}/py.typed")
+        if any(
+            name.startswith(("tests/", "docs/", "examples/", "tools/", ".github/"))
+            for name in names
+        ):
+            raise SystemExit("wheel contains development-only directories")
+
+        entry_points_name = next(
+            (name for name in names if name.endswith(".dist-info/entry_points.txt")), None
+        )
+        if entry_points_name is None:
+            raise SystemExit("wheel has no entry_points.txt")
+        entry_points = configparser.ConfigParser()
+        entry_points.read_string(archive.read(entry_points_name).decode("utf-8"))
+
+    if "console_scripts" not in entry_points:
+        raise SystemExit("wheel has no console_scripts entry point group")
+    if entry_points["console_scripts"].get(PACKAGE) != EXPECTED_CONSOLE_SCRIPT:
+        raise SystemExit(f"wheel is missing the {PACKAGE} console script")
+
+    metadata = Parser().parsestr(_wheel_metadata(path))
+    python_requirement = metadata.get("Requires-Python")
+    if python_requirement != EXPECTED_PYTHON:
+        raise SystemExit(
+            f"wheel Requires-Python is {python_requirement!r}; expected {EXPECTED_PYTHON!r}"
+        )
+
     installed = {req.name.casefold().replace("_", "-") for req in _requirements(path)}
     bad = sorted(installed & FORBIDDEN)
     if bad:
@@ -63,7 +92,39 @@ def _check_wheel(path: Path) -> str:
 def _check_sdist(path: Path) -> str:
     with tarfile.open(path, "r:gz") as archive:
         names = archive.getnames()
-    required = ("pyproject.toml", "README.md", "LICENSE", f"{PACKAGE}/__init__.py")
+    excluded_components = {
+        ".ledger",
+        ".repairledger",
+        ".taskledger",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "__pycache__",
+        "build",
+        "dist",
+        "_build",
+    }
+    if any(excluded_components.intersection(Path(name).parts) for name in names):
+        raise SystemExit("sdist contains local ledger, cache, or build files")
+    required = (
+        "pyproject.toml",
+        "README.md",
+        "LICENSE",
+        "NOTICE",
+        "docs/index.md",
+        "docs/conf.py",
+        "docs/make.py",
+        "docs/Makefile",
+        "docs/requirements.txt",
+        "examples/README.md",
+        "examples/basic_usage.py",
+        "examples/result_inspection.py",
+        "examples/backend_modes.py",
+        "examples/custom_backend.py",
+        "examples/codec_only.py",
+        f"{PACKAGE}/__init__.py",
+        f"{PACKAGE}/py.typed",
+    )
     if not all(any(name.endswith(value) for name in names) for value in required):
         raise SystemExit("sdist is missing required project files")
     return _sdist_version(path)
