@@ -33,6 +33,8 @@
 
 Pass `LinguisticToken` and `PronunciationOverride` values to `KittenG2P.phonemize_prepared()` or the convenience function. Their offsets are half-open character spans into the original prepared text. Explicit spans use Kitten-supported IPA and are authoritative over configured lexicons and contextual rules.
 
+Linguistic tokens are optional source-aligned annotations; they do not define or replace Kitteng2p's own word segmentation. Exact one-word spans retain all supplied annotations. A hint that contains exactly one complete Kitteng2p word plus non-word material is projected to the internal word span/text and retains POS, tag, morphology, and language; its lemma is not copied unless the spans are exact. Punctuation-only hints and hints that cover no safe single word (including partial-word, contraction-fragment, and multiword spans) are ignored. Invalid offsets, source-text mismatches, and overlapping caller token spans remain errors. Explicit pronunciation overrides are still validated against complete internal words.
+
 ```{eval-rst}
 .. autoclass:: kitteng2p.LinguisticToken
    :members:

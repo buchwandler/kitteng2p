@@ -71,6 +71,8 @@ print(result.pronunciation_trace)
 
 Request-local `PronunciationOverride` spans have highest precedence. Tokens and override offsets are half-open character spans into the original prepared text. Context rules use the supplied tags and nearby sentence text without downloading an NLP model. `PhonemizeResult.pronunciation_trace` records each occurrence's source, selector, and decision reason.
 
+Linguistic tokens are optional source-aligned annotations, not a replacement tokenizer. Kitteng2p keeps its own word segmentation authoritative: exact one-word annotations are used directly, and an annotation containing exactly one source word plus non-word material may be projected onto that word. Punctuation-only, partial-word, contraction-fragment, and other hints that cannot be mapped safely are ignored as annotations. Invalid offsets, source-text mismatches, and overlapping caller spans still fail. Explicit pronunciation overrides remain stricter and must cover complete Kitteng2p words.
+
 `discover_lexicons(language="en-us")` returns catalog metadata and installed state without installing assets; only a selected named source may be provisioned under the `auto` policy. `inspect_g2lex_file(path)` reports canonical path, content and logical hashes, entry count, locale, encoding, and Kitten compatibility.
 
 ## Command line

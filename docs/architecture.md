@@ -33,6 +33,8 @@ With no selected lexicons, tokens, or explicit overrides, the original whole-req
 
 The G2Lex runtime uses ordered source precedence: request-local override, local files, named sources, contextual fallback, then eSpeak. Within each tagged record, the selector order is exact tag, broad POS, context/sense selector, and `DEFAULT`. Every non-eSpeak decision is represented in the per-occurrence pronunciation trace. Selected lexicon IPA and explicit IPA overrides are rejected if encoding would drop unsupported Kitten symbols; ordinary eSpeak output retains its existing `dropped_symbols` behavior.
 
+Kitteng2p owns word segmentation for lexicon lookup, heteronym/context resolution, traces, and pronunciation-override validation. Caller linguistic tokens are optional annotations projected onto those internal words only when one complete word can be identified safely. Non-word punctuation, partial tokenizer pieces, and multiword hints do not redefine segmentation or fail synthesis; corrupted offsets, mismatched source text, and overlapping caller spans remain strict errors.
+
 ## Backend boundary
 
 `PhonemeBackend` remains structural:

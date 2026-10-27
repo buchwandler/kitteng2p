@@ -66,6 +66,45 @@ def _word_tokens(text: str) -> tuple[LinguisticToken, ...]:
     )
 
 
+def _project_linguistic_annotations(
+    words: tuple[LinguisticToken, ...],
+    tokens: tuple[LinguisticToken, ...],
+) -> tuple[LinguisticToken, ...]:
+    projected: dict[tuple[int, int], LinguisticToken] = {}
+    word_index = 0
+    for hint in tokens:
+        while word_index < len(words) and words[word_index].end <= hint.start:
+            word_index += 1
+
+        overlaps: list[LinguisticToken] = []
+        candidate_index = word_index
+        while candidate_index < len(words) and words[candidate_index].start < hint.end:
+            word = words[candidate_index]
+            if hint.start < word.end:
+                overlaps.append(word)
+            candidate_index += 1
+
+        if len(overlaps) != 1:
+            continue
+        word = overlaps[0]
+        if hint.start > word.start or hint.end < word.end:
+            continue
+
+        exact = (hint.start, hint.end) == (word.start, word.end)
+        projected[(word.start, word.end)] = LinguisticToken(
+            word.start,
+            word.end,
+            word.text,
+            pos=hint.pos,
+            tag=hint.tag,
+            lemma=hint.lemma if exact else None,
+            morph=hint.morph,
+            language=hint.language,
+        )
+
+    return tuple(projected.get((word.start, word.end), word) for word in words)
+
+
 def _normalize_tokens(
     text: str,
     values: (
@@ -76,10 +115,8 @@ def _normalize_tokens(
     if values is None:
         return words
     supplied = (values,) if isinstance(values, (LinguisticToken, Mapping)) else tuple(values)
-    tokens = sorted((_as_token(value) for value in supplied), key=lambda item: item.start)
-    by_span = {(word.start, word.end): word for word in words}
+    tokens = tuple(_as_token(value) for value in supplied)
     previous_end = -1
-    aligned: dict[tuple[int, int], LinguisticToken] = {}
     for token in tokens:
         if token.end > len(text):
             raise ValueError(
@@ -91,16 +128,11 @@ def _normalize_tokens(
                 f"linguistic token text {token.text!r} does not match source text at "
                 f"span [{token.start}, {token.end})"
             )
-        span = (token.start, token.end)
         if token.start < previous_end:
-            raise ValueError("linguistic token spans must not overlap")
-        if span not in by_span:
-            raise ValueError(
-                f"linguistic token span [{token.start}, {token.end}) must align to one source word"
-            )
-        aligned[span] = token
+            raise ValueError("linguistic token spans must be monotonic and must not overlap")
         previous_end = token.end
-    return tuple(aligned.get((word.start, word.end), word) for word in words)
+
+    return _project_linguistic_annotations(words, tokens)
 
 
 def _normalize_overrides(
