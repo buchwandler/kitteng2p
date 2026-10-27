@@ -15,7 +15,18 @@ from .codec import (
 )
 from .config import KittenG2PConfig
 from .errors import BackendUnavailableError, KittenG2PError, PhonemizationError
-from .types import PhonemizeResult
+from .lexicons import discover_lexicons, inspect_g2lex_file
+from .types import (
+    G2LexFileInspection,
+    G2LexFileRef,
+    LexiconDiscoveryResult,
+    LinguisticToken,
+    NamedLexiconInfo,
+    PhonemizeResult,
+    PronunciationDiagnostic,
+    PronunciationOverride,
+    PronunciationTrace,
+)
 
 try:
     __version__ = _distribution_version("kitteng2p")
@@ -27,16 +38,26 @@ __all__ = [
     "BackendUnavailableError",
     "FRAME_PREFIX_ID",
     "FRAME_SUFFIX_IDS",
+    "G2LexFileInspection",
+    "G2LexFileRef",
     "KittenG2P",
     "KittenG2PConfig",
     "KittenG2PError",
+    "LexiconDiscoveryResult",
+    "LinguisticToken",
+    "NamedLexiconInfo",
     "PhonemizationError",
     "PhonemizeResult",
+    "PronunciationDiagnostic",
+    "PronunciationOverride",
+    "PronunciationTrace",
     "SYMBOLS",
     "basic_english_tokenize",
+    "discover_lexicons",
     "encode_phonemes",
     "frame_token_ids",
     "get_g2p",
+    "inspect_g2lex_file",
     "phoneme_ids",
     "phonemes",
     "phonemize_prepared",

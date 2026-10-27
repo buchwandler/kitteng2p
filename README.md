@@ -45,6 +45,34 @@ print(result.dropped_symbols)
 The result's `token_ids` already include model framing. The convenience
 functions `phonemes()` and `phoneme_ids()` create and close a temporary frontend.
 
+## G2Lex sources and occurrence context
+
+The default configuration remains eSpeak-only. To opt in to named Lexphon catalog entries or local IPA `.g2lex` files, configure the source stack explicitly. Local files are evaluated in the order supplied, followed by named selectors in the order supplied; source misses fall through to later sources and then eSpeak. Selected IPA values are checked against Kitten's codec and unsupported symbols fail instead of being silently dropped.
+
+```python
+from kitteng2p import G2LexFileRef, KittenG2P, KittenG2PConfig, LinguisticToken
+
+text = "A minute crack appeared."
+minute_start = text.index("minute")
+config = KittenG2PConfig(
+    g2lex_files=(G2LexFileRef("./book-pronunciations.g2lex"),),
+    lexicons=("lexhint",),
+    lexicon_data_policy="installed-only",
+)
+tokens = (
+    LinguisticToken(minute_start, minute_start + len("minute"), "minute", pos="NOUN", tag="NN"),
+)
+with KittenG2P(config) as g2p:
+    result = g2p.phonemize_prepared(text, tokens=tokens)
+
+print(result.phonemes)
+print(result.pronunciation_trace)
+```
+
+Request-local `PronunciationOverride` spans have highest precedence. Tokens and override offsets are half-open character spans into the original prepared text. Context rules use the supplied tags and nearby sentence text without downloading an NLP model. `PhonemizeResult.pronunciation_trace` records each occurrence's source, selector, and decision reason.
+
+`discover_lexicons(language="en-us")` returns catalog metadata and installed state without installing assets; only a selected named source may be provisioned under the `auto` policy. `inspect_g2lex_file(path)` reports canonical path, content and logical hashes, entry count, locale, encoding, and Kitten compatibility.
+
 ## Command line
 
 ```console

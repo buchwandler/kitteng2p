@@ -40,6 +40,31 @@ The language is forwarded as an eSpeak voice/language selector. Use `native`
 or `cli` instead of `auto` only when the application needs a specific runtime
 path.
 
+## Named and local G2Lex sources
+
+G2Lex selection is opt-in; `KittenG2PConfig()` still uses whole-request eSpeak by default. Supply local files and named Lexphon selectors explicitly. Local file order precedes named-selector order, and named assets are installed only when selected with `lexicon_data_policy="auto"`.
+
+```python
+from kitteng2p import G2LexFileRef, KittenG2P, KittenG2PConfig, LinguisticToken
+
+text = "A minute crack appeared."
+start = text.index("minute")
+config = KittenG2PConfig(
+    g2lex_files=(G2LexFileRef("./book-pronunciations.g2lex"),),
+    lexicons=("lexhint",),
+    lexicon_data_policy="installed-only",
+)
+tokens = (LinguisticToken(start, start + 6, "minute", pos="NOUN", tag="NN"),)
+with KittenG2P(config) as g2p:
+    result = g2p.phonemize_prepared(text, tokens=tokens)
+
+print(result.pronunciation_trace)
+```
+
+Use `PronunciationOverride(start, end, phonemes, alphabet="ipa")` for a request-local pronunciation that overrides every configured source. Token and override spans are half-open character offsets into the original text. Selected IPA must use the Kitten-supported symbol inventory; unsupported symbols raise an actionable error instead of being dropped.
+
+`discover_lexicons(language="en-us")` lists catalog metadata and installed state without installing data. `inspect_g2lex_file(path)` reports file hashes, entry count, language, encoding, and Kitten compatibility. Context rules cover a small set of well-supported English heteronyms and require no NLP model download.
+
 ## Prepared-text boundary
 
 `kitteng2p` does not expand semantic written forms. If an application wants

@@ -14,11 +14,41 @@
    :members:
 ```
 
+## Lexicon discovery and inspection
+
+```{eval-rst}
+.. autofunction:: kitteng2p.discover_lexicons
+.. autofunction:: kitteng2p.inspect_g2lex_file
+.. autoclass:: kitteng2p.G2LexFileRef
+   :members:
+.. autoclass:: kitteng2p.G2LexFileInspection
+   :members:
+.. autoclass:: kitteng2p.LexiconDiscoveryResult
+   :members:
+.. autoclass:: kitteng2p.NamedLexiconInfo
+   :members:
+```
+
+## Request tokens, overrides, and provenance
+
+Pass `LinguisticToken` and `PronunciationOverride` values to `KittenG2P.phonemize_prepared()` or the convenience function. Their offsets are half-open character spans into the original prepared text. Explicit spans use Kitten-supported IPA and are authoritative over configured lexicons and contextual rules.
+
+```{eval-rst}
+.. autoclass:: kitteng2p.LinguisticToken
+   :members:
+.. autoclass:: kitteng2p.PronunciationOverride
+   :members:
+.. autoclass:: kitteng2p.PronunciationTrace
+   :members:
+.. autoclass:: kitteng2p.PronunciationDiagnostic
+   :members:
+```
+
 ## Result
 
 ```{eval-rst}
 .. autoclass:: kitteng2p.PhonemizeResult
-   :members: ids
+   :members: ids, pronunciation_trace, diagnostics
    :exclude-members: text, raw_phonemes, phonemes, token_ids, language, dropped_symbols
 ```
 

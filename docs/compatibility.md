@@ -23,6 +23,12 @@ dependencies and centralizes native and CLI eSpeak handling, but codec
 compatibility alone does not prove that every input produces identical
 phoneme text or token IDs across platforms and eSpeak versions.
 
+## Optional G2Lex compatibility
+
+G2Lex sources are an additive opt-in path; no named lexicon becomes a silent default. Kitten currently accepts only IPA pronunciation sources whose symbols survive the Kitten codec. Catalog entries with another encoding are discoverable but reported as incompatible, and selected local/named values or explicit overrides containing unsupported symbols fail rather than producing truncated IDs. eSpeak-only calls retain the historical dropped-symbol behavior.
+
+When source-aware composition is active, fallback eSpeak calls receive maximal contiguous text runs around overridden spans. Original punctuation is retained, and the Kitten preparation/encoding/framing step runs once on the assembled stream. Pronunciation traces distinguish explicit, local, named, contextual, and eSpeak decisions. This lexical behavior is separate from prosody and does not claim to fix clause-boundary or intonation differences.
+
 ## Golden parity
 
 Exact sentence-level ID parity has not been established across a representative

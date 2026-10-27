@@ -1,0 +1,30 @@
+[
+  {
+    "id": "T20",
+    "text": "A minute later, we returned.",
+    "word": "minute",
+    "expected_ipa": "ˈmɪnɪt",
+    "selector": "SENSE_TIME"
+  },
+  {
+    "id": "T21",
+    "text": "A minute crack appeared in the glass.",
+    "word": "minute",
+    "expected_ipa": "maɪˈnuːt",
+    "selector": "SENSE_SMALL"
+  },
+  {
+    "id": "T22",
+    "text": "A polite bow to the audience.",
+    "word": "bow",
+    "expected_ipa": "baʊ",
+    "selector": "SENSE_GESTURE"
+  },
+  {
+    "id": "T23",
+    "text": "The hunting bow uses an arrow.",
+    "word": "bow",
+    "expected_ipa": "boʊ",
+    "selector": "SENSE_WEAPON"
+  }
+]
