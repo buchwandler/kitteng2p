@@ -1,0 +1,2407 @@
+ README.md                                |  28 ++
+ docs/api.md                              |  32 +-
+ docs/architecture.md                     |  54 ++--
+ docs/compatibility.md                    |   6 +
+ docs/quickstart.md                       |  25 ++
+ kitteng2p/__init__.py                    |  23 +-
+ kitteng2p/api.py                         | 528 ++++++++++++++++++++++++++++---
+ kitteng2p/config.py                      |  95 +++++-
+ kitteng2p/context.py                     | 208 ++++++++++++
+ kitteng2p/lexicons.py                    | 440 ++++++++++++++++++++++++++
+ kitteng2p/types.py                       | 128 ++++++++
+ pyproject.toml                           |   2 +
+ tests/fixtures/heteronym_evaluation.json |  30 ++
+ tests/test_config.py                     |  35 +-
+ tests/test_g2lex_sources.py              | 165 ++++++++++
+ tests/test_heteronym_context.py          |  75 +++++
+ tests/test_lexicon_discovery.py          | 166 ++++++++++
+ tests/test_pronunciation_overrides.py    |  90 ++++++
+ 18 files changed, 2045 insertions(+), 85 deletions(-)
+
+diff --git a/README.md b/README.md
+index a1790ef..dc24696 100644
+--- a/README.md
++++ b/README.md
+@@ -45,6 +45,34 @@ print(result.dropped_symbols)
+ The result's `token_ids` already include model framing. The convenience
+ functions `phonemes()` and `phoneme_ids()` create and close a temporary frontend.
+
++## G2Lex sources and occurrence context
++
++The default configuration remains eSpeak-only. To opt in to named Lexphon catalog entries or local IPA `.g2lex` files, configure the source stack explicitly. Local files are evaluated in the order supplied, followed by named selectors in the order supplied; source misses fall through to later sources and then eSpeak. Selected IPA values are checked against Kitten's codec and unsupported symbols fail instead of being silently dropped.
++
++```python
++from kitteng2p import G2LexFileRef, KittenG2P, KittenG2PConfig, LinguisticToken
++
++text = "A minute crack appeared."
++minute_start = text.index("minute")
++config = KittenG2PConfig(
++    g2lex_files=(G2LexFileRef("./book-pronunciations.g2lex"),),
++    lexicons=("lexhint",),
++    lexicon_data_policy="installed-only",
++)
++tokens = (
++    LinguisticToken(minute_start, minute_start + len("minute"), "minute", pos="NOUN", tag="NN"),
++)
++with KittenG2P(config) as g2p:
++    result = g2p.phonemize_prepared(text, tokens=tokens)
++
++print(result.phonemes)
++print(result.pronunciation_trace)
++```
++
++Request-local `PronunciationOverride` spans have highest precedence. Tokens and override offsets are half-open character spans into the original prepared text. Context rules use the supplied tags and nearby sentence text without downloading an NLP model. `PhonemizeResult.pronunciation_trace` records each occurrence's source, selector, and decision reason.
++
++`discover_lexicons(language="en-us")` returns catalog metadata and installed state without installing assets; only a selected named source may be provisioned under the `auto` policy. `inspect_g2lex_file(path)` reports canonical path, content and logical hashes, entry count, locale, encoding, and Kitten compatibility.
++
+ ## Command line
+
+ ```console
+diff --git a/docs/api.md b/docs/api.md
+index 65fb744..25c9d39 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -14,11 +14,41 @@
+    :members:
+ ```
+
++## Lexicon discovery and inspection
++
++```{eval-rst}
++.. autofunction:: kitteng2p.discover_lexicons
++.. autofunction:: kitteng2p.inspect_g2lex_file
++.. autoclass:: kitteng2p.G2LexFileRef
++   :members:
++.. autoclass:: kitteng2p.G2LexFileInspection
++   :members:
++.. autoclass:: kitteng2p.LexiconDiscoveryResult
++   :members:
++.. autoclass:: kitteng2p.NamedLexiconInfo
++   :members:
++```
++
++## Request tokens, overrides, and provenance
++
++Pass `LinguisticToken` and `PronunciationOverride` values to `KittenG2P.phonemize_prepared()` or the convenience function. Their offsets are half-open character spans into the original prepared text. Explicit spans use Kitten-supported IPA and are authoritative over configured lexicons and contextual rules.
++
++```{eval-rst}
++.. autoclass:: kitteng2p.LinguisticToken
++   :members:
++.. autoclass:: kitteng2p.PronunciationOverride
++   :members:
++.. autoclass:: kitteng2p.PronunciationTrace
++   :members:
++.. autoclass:: kitteng2p.PronunciationDiagnostic
++   :members:
++```
++
+ ## Result
+
+ ```{eval-rst}
+ .. autoclass:: kitteng2p.PhonemizeResult
+-   :members: ids
++   :members: ids, pronunciation_trace, diagnostics
+    :exclude-members: text, raw_phonemes, phonemes, token_ids, language, dropped_symbols
+ ```
+
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 249eac5..1098cdf 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -1,41 +1,53 @@
+ # Architecture
+
+-`kitteng2p` is the model-specific frontend between prepared text and KittenTTS input IDs.
++`kitteng2p` is the Kitten-specific frontend between prepared text and KittenTTS input IDs. It owns source selection and occurrence-level pronunciation decisions without depending on KittenSynth or VoiceRender.
+
+ ```text
+-caller semantic preparation
++prepared text + optional linguistic tokens / request-local IPA spans
+        |
+        v
+-prepared English text
+-       |
+-       v
+-espeakng-runtime
+-       |
+-       v
+-Kitten v0.8 regex tokenization
+-       |
+-       v
+-Kitten character table + [0] ... [10, 0] framing
+-       |
+-       v
+-tuple[int, ...]
++explicit span -> ordered local G2Lex files -> ordered named Lexphon sources
++       |                   |                         |
++       +-------------------+-------------------------+
++                           |
++                           v
++          exact tag -> broad POS -> context selector -> DEFAULT
++                           |
++                           v
++       contextual English rule (when no source reading applies)
++                           |
++                           v
++       eSpeak for maximal contiguous fallback text runs
++                           |
++                           v
++       assemble IPA / preserve punctuation / prepare once
++                           |
++                           v
++       Kitten v0.8 character table + [0] ... [10, 0] framing
++                           |
++                           v
++                    tuple[int, ...]
+ ```
+
+-The package deliberately does not import OnnxVoice, NumPy, or KittenSynth.
++With no selected lexicons, tokens, or explicit overrides, the original whole-request eSpeak path is retained. Catalog discovery is metadata-only; named data is provisioned only when selected and allowed by the configured data policy. Local files are explicit paths, validated by content hash, logical hash, locale, and IPA encoding. No filesystem scan is performed.
++
++The G2Lex runtime uses ordered source precedence: request-local override, local files, named sources, contextual fallback, then eSpeak. Within each tagged record, the selector order is exact tag, broad POS, context/sense selector, and `DEFAULT`. Every non-eSpeak decision is represented in the per-occurrence pronunciation trace. Selected lexicon IPA and explicit IPA overrides are rejected if encoding would drop unsupported Kitten symbols; ordinary eSpeak output retains its existing `dropped_symbols` behavior.
+
+ ## Backend boundary
+
+-`PhonemeBackend` is structural:
++`PhonemeBackend` remains structural:
+
+ ```python
+ phonemize(text, *, language) -> str
+ close() -> None
+ ```
+
+-Tests can inject a deterministic backend. Production defaults to `espeakng-runtime`.
++Tests can inject a deterministic backend. Production defaults to `espeakng-runtime`; fallback calls remain phrase-sized rather than issuing one eSpeak call per ordinary word.
++
++## Dependency boundaries
++
++The dependency direction is `g2lex + lexphon -> kitteng2p -> kittensynth -> voicerender`. Kitteng2p does not import OnnxVoice, NumPy, KittenSynth, VoiceRender, or KokoroG2P.
+
+ ## Compatibility policy
+
+-The character inventory and framing are exact translations of the public v0.8 code. The default
+-eSpeak execution layer is modernized from upstream `phonemizer` to the shared `espeakng-runtime`.
+-A golden parity suite against released KittenTTS should therefore be the first post-MVP task.
++The character inventory and framing are exact translations of the public v0.8 code. The default eSpeak execution layer is modernized from upstream `phonemizer` to shared `espeakng-runtime`. Existing eSpeak-only calls and codec behavior remain unchanged; selected lexicon data is validated strictly before encoding.
+diff --git a/docs/compatibility.md b/docs/compatibility.md
+index 5dd64c4..1314745 100644
+--- a/docs/compatibility.md
++++ b/docs/compatibility.md
+@@ -23,6 +23,12 @@ dependencies and centralizes native and CLI eSpeak handling, but codec
+ compatibility alone does not prove that every input produces identical
+ phoneme text or token IDs across platforms and eSpeak versions.
+
++## Optional G2Lex compatibility
++
++G2Lex sources are an additive opt-in path; no named lexicon becomes a silent default. Kitten currently accepts only IPA pronunciation sources whose symbols survive the Kitten codec. Catalog entries with another encoding are discoverable but reported as incompatible, and selected local/named values or explicit overrides containing unsupported symbols fail rather than producing truncated IDs. eSpeak-only calls retain the historical dropped-symbol behavior.
++
++When source-aware composition is active, fallback eSpeak calls receive maximal contiguous text runs around overridden spans. Original punctuation is retained, and the Kitten preparation/encoding/framing step runs once on the assembled stream. Pronunciation traces distinguish explicit, local, named, contextual, and eSpeak decisions. This lexical behavior is separate from prosody and does not claim to fix clause-boundary or intonation differences.
++
+ ## Golden parity
+
+ Exact sentence-level ID parity has not been established across a representative
+diff --git a/docs/quickstart.md b/docs/quickstart.md
+index e0de49d..1ffefc6 100644
+--- a/docs/quickstart.md
++++ b/docs/quickstart.md
+@@ -40,6 +40,31 @@ The language is forwarded as an eSpeak voice/language selector. Use `native`
+ or `cli` instead of `auto` only when the application needs a specific runtime
+ path.
+
++## Named and local G2Lex sources
++
++G2Lex selection is opt-in; `KittenG2PConfig()` still uses whole-request eSpeak by default. Supply local files and named Lexphon selectors explicitly. Local file order precedes named-selector order, and named assets are installed only when selected with `lexicon_data_policy="auto"`.
++
++```python
++from kitteng2p import G2LexFileRef, KittenG2P, KittenG2PConfig, LinguisticToken
++
++text = "A minute crack appeared."
++start = text.index("minute")
++config = KittenG2PConfig(
++    g2lex_files=(G2LexFileRef("./book-pronunciations.g2lex"),),
++    lexicons=("lexhint",),
++    lexicon_data_policy="installed-only",
++)
++tokens = (LinguisticToken(start, start + 6, "minute", pos="NOUN", tag="NN"),)
++with KittenG2P(config) as g2p:
++    result = g2p.phonemize_prepared(text, tokens=tokens)
++
++print(result.pronunciation_trace)
++```
++
++Use `PronunciationOverride(start, end, phonemes, alphabet="ipa")` for a request-local pronunciation that overrides every configured source. Token and override spans are half-open character offsets into the original text. Selected IPA must use the Kitten-supported symbol inventory; unsupported symbols raise an actionable error instead of being dropped.
++
++`discover_lexicons(language="en-us")` lists catalog metadata and installed state without installing data. `inspect_g2lex_file(path)` reports file hashes, entry count, language, encoding, and Kitten compatibility. Context rules cover a small set of well-supported English heteronyms and require no NLP model download.
++
+ ## Prepared-text boundary
+
+ `kitteng2p` does not expand semantic written forms. If an application wants
+diff --git a/kitteng2p/__init__.py b/kitteng2p/__init__.py
+index df4f146..2ec3b46 100644
+--- a/kitteng2p/__init__.py
++++ b/kitteng2p/__init__.py
+@@ -15,7 +15,18 @@ from .codec import (
+ )
+ from .config import KittenG2PConfig
+ from .errors import BackendUnavailableError, KittenG2PError, PhonemizationError
+-from .types import PhonemizeResult
++from .lexicons import discover_lexicons, inspect_g2lex_file
++from .types import (
++    G2LexFileInspection,
++    G2LexFileRef,
++    LexiconDiscoveryResult,
++    LinguisticToken,
++    NamedLexiconInfo,
++    PhonemizeResult,
++    PronunciationDiagnostic,
++    PronunciationOverride,
++    PronunciationTrace,
++)
+
+ try:
+     __version__ = _distribution_version("kitteng2p")
+@@ -27,16 +38,26 @@ __all__ = [
+     "BackendUnavailableError",
+     "FRAME_PREFIX_ID",
+     "FRAME_SUFFIX_IDS",
++    "G2LexFileInspection",
++    "G2LexFileRef",
+     "KittenG2P",
+     "KittenG2PConfig",
+     "KittenG2PError",
++    "LexiconDiscoveryResult",
++    "LinguisticToken",
++    "NamedLexiconInfo",
+     "PhonemizationError",
+     "PhonemizeResult",
++    "PronunciationDiagnostic",
++    "PronunciationOverride",
++    "PronunciationTrace",
+     "SYMBOLS",
+     "basic_english_tokenize",
++    "discover_lexicons",
+     "encode_phonemes",
+     "frame_token_ids",
+     "get_g2p",
++    "inspect_g2lex_file",
+     "phoneme_ids",
+     "phonemes",
+     "phonemize_prepared",
+diff --git a/kitteng2p/api.py b/kitteng2p/api.py
+index 931b963..568fd26 100644
+--- a/kitteng2p/api.py
++++ b/kitteng2p/api.py
+@@ -1,9 +1,253 @@
+ from __future__ import annotations
+
++import re
++from collections.abc import Mapping, Sequence
++from typing import Any
++
+ from .backends.base import PhonemeBackend
+-from .codec import encode_phonemes, frame_token_ids, prepare_phoneme_text
++from .codec import SYMBOL_TO_ID, encode_phonemes, frame_token_ids, prepare_phoneme_text
+ from .config import KittenG2PConfig
+-from .types import PhonemizeResult
++from .context import ContextResolution, resolve_english_heteronym
++from .lexicons import LoadedLexiconSource, open_g2lex_sources
++from .types import (
++    LinguisticToken,
++    PhonemizeResult,
++    PronunciationOverride,
++    PronunciationTrace,
++)
++
++_WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
++_PUNCTUATION = frozenset(",.;:!?…—-–'\"“”‘’()[]{}«»")
++
++
++def _as_token(value: LinguisticToken | Mapping[str, Any]) -> LinguisticToken:
++    if isinstance(value, LinguisticToken):
++        return value
++    if not isinstance(value, Mapping):
++        raise TypeError("tokens must contain LinguisticToken values or mappings")
++    try:
++        return LinguisticToken(
++            start=value["start"],
++            end=value["end"],
++            text=value["text"],
++            pos=value.get("pos"),
++            tag=value.get("tag"),
++            lemma=value.get("lemma"),
++            morph=value.get("morph"),
++            language=value.get("language"),
++        )
++    except KeyError as exc:
++        raise ValueError(f"linguistic token is missing required field {exc.args[0]!r}") from exc
++
++
++def _as_override(value: PronunciationOverride | Mapping[str, Any]) -> PronunciationOverride:
++    if isinstance(value, PronunciationOverride):
++        return value
++    if not isinstance(value, Mapping):
++        raise TypeError("pronunciation overrides must be typed values or mappings")
++    try:
++        return PronunciationOverride(
++            start=value["start"],
++            end=value["end"],
++            phonemes=value["phonemes"],
++            language=value.get("language"),
++            alphabet=value.get("alphabet", "ipa"),
++        )
++    except KeyError as exc:
++        raise ValueError(
++            f"pronunciation override is missing required field {exc.args[0]!r}"
++        ) from exc
++
++
++def _word_tokens(text: str) -> tuple[LinguisticToken, ...]:
++    return tuple(
++        LinguisticToken(match.start(), match.end(), match.group())
++        for match in _WORD_RE.finditer(text)
++    )
++
++
++def _normalize_tokens(
++    text: str,
++    values: (
++        Sequence[LinguisticToken | Mapping[str, Any]] | LinguisticToken | Mapping[str, Any] | None
++    ),
++) -> tuple[LinguisticToken, ...]:
++    words = _word_tokens(text)
++    if values is None:
++        return words
++    supplied = (values,) if isinstance(values, (LinguisticToken, Mapping)) else tuple(values)
++    tokens = sorted((_as_token(value) for value in supplied), key=lambda item: item.start)
++    by_span = {(word.start, word.end): word for word in words}
++    previous_end = -1
++    aligned: dict[tuple[int, int], LinguisticToken] = {}
++    for token in tokens:
++        if token.end > len(text):
++            raise ValueError(
++                f"linguistic token span [{token.start}, {token.end}) exceeds "
++                f"text length {len(text)}"
++            )
++        if text[token.start : token.end] != token.text:
++            raise ValueError(
++                f"linguistic token text {token.text!r} does not match source text at "
++                f"span [{token.start}, {token.end})"
++            )
++        span = (token.start, token.end)
++        if token.start < previous_end:
++            raise ValueError("linguistic token spans must not overlap")
++        if span not in by_span:
++            raise ValueError(
++                f"linguistic token span [{token.start}, {token.end}) must align to one source word"
++            )
++        aligned[span] = token
++        previous_end = token.end
++    return tuple(aligned.get((word.start, word.end), word) for word in words)
++
++
++def _normalize_overrides(
++    text: str,
++    values: Sequence[PronunciationOverride | Mapping[str, Any]]
++    | PronunciationOverride
++    | Mapping[str, Any]
++    | None,
++    language: str,
++    tokens: tuple[LinguisticToken, ...],
++) -> tuple[PronunciationOverride, ...]:
++    if values is None:
++        return ()
++    supplied = (values,) if isinstance(values, (PronunciationOverride, Mapping)) else tuple(values)
++    overrides = sorted((_as_override(value) for value in supplied), key=lambda item: item.start)
++    word_spans = {(token.start, token.end) for token in tokens}
++    previous_end = -1
++    for override in overrides:
++        if override.end > len(text):
++            raise ValueError(
++                f"pronunciation override span [{override.start}, {override.end}) exceeds "
++                f"text length {len(text)}"
++            )
++        if override.start < previous_end:
++            raise ValueError("explicit pronunciation override spans must not overlap")
++        if override.language and (
++            override.language.casefold().replace("_", "-") != language.casefold().replace("_", "-")
++        ):
++            raise ValueError(
++                f"pronunciation override language {override.language!r} does not match "
++                f"request language {language!r}"
++            )
++        covered = [
++            span for span in word_spans if override.start <= span[0] and span[1] <= override.end
++        ]
++        if (
++            not covered
++            or min(start for start, _ in covered) != override.start
++            or max(end for _, end in covered) != override.end
++        ):
++            raise ValueError(
++                f"pronunciation override span [{override.start}, {override.end}) must cover "
++                "one or more complete source words"
++            )
++        _validate_ipa(override.phonemes, text[override.start : override.end], "explicit override")
++        previous_end = override.end
++    return tuple(overrides)
++
++
++def _validate_ipa(phonemes: str, source_text: str, source_name: str) -> str:
++    value = phonemes.strip()
++    for symbol in value:
++        if not symbol.isspace() and symbol not in SYMBOL_TO_ID:
++            raise ValueError(
++                f"Pronunciation for {source_text!r} from {source_name!r} contains unsupported "
++                f"Kitten phoneme symbol {symbol!r}. The pronunciation was not silently truncated."
++            )
++    prepared = prepare_phoneme_text(value)
++    _ids, dropped = encode_phonemes(prepared)
++    if dropped:
++        symbol = dropped[0]
++        raise ValueError(
++            f"Pronunciation for {source_text!r} from {source_name!r} contains unsupported "
++            f"Kitten phoneme symbol {symbol!r}. The pronunciation was not silently truncated."
++        )
++    if not prepared:
++        raise ValueError(f"Pronunciation for {source_text!r} from {source_name!r} is empty")
++    return value
++
++
++def _tag_pos(tag: str | None) -> str | None:
++    if not tag:
++        return None
++    value = tag.upper()
++    if value.startswith("NN"):
++        return "NOUN"
++    if value.startswith("VB"):
++        return "VERB"
++    if value.startswith("JJ"):
++        return "ADJ"
++    if value.startswith("RB"):
++        return "ADV"
++    if value in {"MD", "AUX"}:
++        return "AUX"
++    if value.startswith("PRP"):
++        return "PRON"
++    return None
++
++
++def _selectors(token: LinguisticToken, context: ContextResolution | None) -> tuple[str, ...]:
++    values: list[str] = []
++    if token.tag:
++        values.append(token.tag)
++    pos = token.pos or _tag_pos(token.tag)
++    if pos:
++        values.append(pos)
++    if context:
++        values.extend(
++            (
++                context.selector,
++                context.selector.replace("SENSE_", "SENSE:"),
++                context.selector.removeprefix("SENSE_"),
++            )
++        )
++    values.append("DEFAULT")
++    seen: set[str] = set()
++    result: list[str] = []
++    for value in values:
++        key = value.casefold()
++        if key not in seen:
++            seen.add(key)
++            result.append(value)
++    return tuple(result)
++
++
++def _case_variants(word: str) -> tuple[str, ...]:
++    values = (word, word.casefold(), word.lower(), word.title(), word.upper())
++    return tuple(dict.fromkeys(values))
++
++
++def _preserve_punctuation(source_text: str, generated: str) -> str:
++    word_ranges = tuple((match.start(), match.end()) for match in _WORD_RE.finditer(source_text))
++    expected: list[str] = []
++    for position, character in enumerate(source_text):
++        if character not in SYMBOL_TO_ID or character.isspace():
++            continue
++        if not any(start <= position < end for start, end in word_ranges):
++            expected.append(character)
++    counts: dict[str, int] = {}
++    for character in generated:
++        counts[character] = counts.get(character, 0) + 1
++    seen: dict[str, int] = {}
++    missing: list[str] = []
++    for character in expected:
++        seen[character] = seen.get(character, 0) + 1
++        if seen[character] > counts.get(character, 0):
++            missing.append(character)
++    return generated + "".join(missing)
++
++
++def _punctuation_after(text: str, offset: int) -> tuple[int, str]:
++    end = offset
++    marks: list[str] = []
++    while end < len(text) and text[end] in _PUNCTUATION:
++        marks.append(text[end])
++        end += 1
++    return end, "".join(marks)
+
+
+ class KittenG2P:
+@@ -49,35 +293,214 @@ class KittenG2P:
+             )
+         self.backend = backend
+         self._closed = False
++        self._lexicon_sources: tuple[LoadedLexiconSource, ...] = ()
++        try:
++            self._lexicon_sources = open_g2lex_sources(
++                self.config.language,
++                self.config.g2lex_files,
++                self.config.lexicons,
++                self.config.lexicon_data_policy,
++            )
++        except Exception:
++            if self._owns_backend:
++                self.backend.close()
++            self._closed = True
++            raise
+
+-    def phonemize_prepared(self, text: str) -> PhonemizeResult:
+-        """Phonemize text that is already prepared and suitable to speak.
+-
+-        This method does not normalize dates, currencies, units, URLs,
+-        abbreviations, or similar written forms. Unknown phoneme characters
+-        are omitted from the encoded payload and reported in
+-        ``PhonemizeResult.dropped_symbols``. The returned ``token_ids`` are
+-        framed as ``(0, *ids, 10, 0)``.
+-
+-        Parameters
+-        ----------
+-        text:
+-            Prepared, speakable input text.
+-
+-        Returns
+-        -------
+-        PhonemizeResult
+-            Raw and prepared phonemes, framed IDs, and dropped symbols.
+-
+-        Raises
+-        ------
+-        RuntimeError
+-            If this frontend has already been closed.
+-        PhonemizationError
+-            If the backend cannot phonemize the input.
++    def phonemize_prepared(
++        self,
++        text: str,
++        *,
++        tokens: (
++            Sequence[LinguisticToken | Mapping[str, Any]]
++            | LinguisticToken
++            | Mapping[str, Any]
++            | None
++        ) = None,
++        pronunciation_overrides: Sequence[PronunciationOverride | Mapping[str, Any]]
++        | PronunciationOverride
++        | Mapping[str, Any]
++        | None = None,
++    ) -> PhonemizeResult:
++        """Phonemize prepared text with optional token context and IPA spans.
++
++        The one-argument call preserves the original whole-request eSpeak path.
++        Explicit spans take precedence over local sources, named sources, context
++        rules, and eSpeak fallback.
+         """
+         if self._closed:
+             raise RuntimeError("KittenG2P is closed")
++        if not isinstance(text, str):
++            raise TypeError("prepared text must be a string")
++        if not self._lexicon_sources and tokens is None and pronunciation_overrides is None:
++            return self._phonemize_legacy(text)
++
++        aligned_tokens = _normalize_tokens(text, tokens)
++        overrides = _normalize_overrides(
++            text, pronunciation_overrides, self.config.language, aligned_tokens
++        )
++        if not self._lexicon_sources and not overrides and not tokens:
++            return self._phonemize_legacy(text)
++
++        choices: list[tuple[int, int, str, PronunciationTrace]] = []
++        explicitly_covered: set[tuple[int, int]] = set()
++        for override in overrides:
++            value = _validate_ipa(
++                override.phonemes, text[override.start : override.end], "explicit override"
++            )
++            choices.append(
++                (
++                    override.start,
++                    override.end,
++                    value,
++                    PronunciationTrace(
++                        text=text[override.start : override.end],
++                        start=override.start,
++                        end=override.end,
++                        phonemes=value,
++                        source="explicit",
++                        selector=None,
++                        reason="request-local pronunciation override has highest precedence",
++                    ),
++                )
++            )
++            explicitly_covered.update(
++                (token.start, token.end)
++                for token in aligned_tokens
++                if override.start <= token.start and token.end <= override.end
++            )
++
++        for index, token in enumerate(aligned_tokens):
++            if (token.start, token.end) in explicitly_covered:
++                continue
++            context = (
++                resolve_english_heteronym(token, aligned_tokens, index, text=text)
++                if self.config.heteronym_policy == "auto"
++                else None
++            )
++
++            selected: tuple[LoadedLexiconSource, str, str | None] | None = None
++            selector_order = _selectors(token, context)
++            for source in self._lexicon_sources:
++                for spelling in _case_variants(token.text):
++                    hit = source.lookup(spelling, selector_order)
++                    if hit is not None:
++                        selected = (source, hit[0], hit[1])
++                        break
++                if selected is not None:
++                    break
++            if selected is not None:
++                source, pronunciation, selector = selected
++                pronunciation = _validate_ipa(pronunciation, token.text, source.source_name)
++                reason = (
++                    f"selected {selector} entry from {source.source_type} source"
++                    if selector
++                    else "unconditional pronunciation entry from selected source"
++                )
++                choices.append(
++                    (
++                        token.start,
++                        token.end,
++                        pronunciation,
++                        PronunciationTrace(
++                            text=token.text,
++                            start=token.start,
++                            end=token.end,
++                            phonemes=pronunciation,
++                            source=source.source_type,  # type: ignore[arg-type]
++                            source_name=source.source_name,
++                            sha256=source.content_sha256,
++                            logical_sha256=source.logical_sha256,
++                            selector=selector,
++                            reason=reason,
++                        ),
++                    )
++                )
++            elif context is not None:
++                pronunciation = _validate_ipa(context.phonemes, token.text, "context-rule")
++                choices.append(
++                    (
++                        token.start,
++                        token.end,
++                        pronunciation,
++                        PronunciationTrace(
++                            text=token.text,
++                            start=token.start,
++                            end=token.end,
++                            phonemes=pronunciation,
++                            source="context-rule",
++                            selector=context.selector,
++                            reason=context.reason,
++                        ),
++                    )
++                )
++
++        replaced_spans = {(start, end) for start, end, _, _ in choices}
++        traces: list[PronunciationTrace] = [trace for _, _, _, trace in choices]
++        for token in aligned_tokens:
++            span = (token.start, token.end)
++            if span not in replaced_spans and span not in explicitly_covered:
++                traces.append(
++                    PronunciationTrace(
++                        text=token.text,
++                        start=token.start,
++                        end=token.end,
++                        phonemes="",
++                        source="espeak",
++                        reason=(
++                            "no selected source or contextual rule supplied an applicable reading"
++                        ),
++                    )
++                )
++
++        if not choices:
++            result = self._phonemize_legacy(text)
++            return PhonemizeResult(
++                text=result.text,
++                raw_phonemes=result.raw_phonemes,
++                phonemes=result.phonemes,
++                token_ids=result.token_ids,
++                language=result.language,
++                dropped_symbols=result.dropped_symbols,
++                pronunciation_trace=tuple(sorted(traces, key=lambda item: item.start)),
++                diagnostics=result.diagnostics,
++            )
++
++        choices.sort(key=lambda item: item[0])
++        pieces: list[str] = []
++        cursor = 0
++        for start, end, pronunciation, _trace in choices:
++            fallback = text[cursor:start]
++            if fallback.strip():
++                generated = _preserve_punctuation(
++                    fallback, self.backend.phonemize(fallback, language=self.config.language)
++                )
++                if generated:
++                    pieces.append(generated)
++            expanded_end, punctuation = _punctuation_after(text, end)
++            pieces.append(pronunciation + punctuation)
++            cursor = expanded_end
++        fallback = text[cursor:]
++        if fallback.strip():
++            generated = _preserve_punctuation(
++                fallback, self.backend.phonemize(fallback, language=self.config.language)
++            )
++            if generated:
++                pieces.append(generated)
++        raw = " ".join(piece for piece in pieces if piece)
++        prepared = prepare_phoneme_text(raw)
++        ids, dropped = encode_phonemes(prepared)
++        return PhonemizeResult(
++            text=text,
++            raw_phonemes=raw,
++            phonemes=prepared,
++            token_ids=frame_token_ids(ids),
++            language=self.config.language,
++            dropped_symbols=dropped,
++            pronunciation_trace=tuple(sorted(traces, key=lambda item: item.start)),
++        )
++
++    def _phonemize_legacy(self, text: str) -> PhonemizeResult:
+         raw = self.backend.phonemize(text, language=self.config.language)
+         prepared = prepare_phoneme_text(raw)
+         ids, dropped = encode_phonemes(prepared)
+@@ -90,10 +513,29 @@ class KittenG2P:
+             dropped_symbols=dropped,
+         )
+
++    @property
++    def pronunciation_identity(self) -> tuple[dict[str, str | None], ...]:
++        """Ordered immutable source identities for diagnostics and downstream caching."""
++        return tuple(
++            {
++                "selector": source.selector,
++                "source_type": source.source_type,
++                "asset_id": source.asset_id,
++                "data_version": source.data_version,
++                "path": source.source_path,
++                "sha256": source.content_sha256,
++                "logical_sha256": source.logical_sha256,
++            }
++            for source in self._lexicon_sources
++        )
++
+     def close(self) -> None:
+-        """Close an internally owned backend; injected backends remain caller-owned."""
++        """Close the opened pronunciation sources and any owned backend."""
+         if self._closed:
+             return
++        for source in reversed(self._lexicon_sources):
++            source.close()
++        self._lexicon_sources = ()
+         if self._owns_backend:
+             self.backend.close()
+         self._closed = True
+@@ -132,28 +574,24 @@ def phonemize_prepared(
+     *,
+     config: KittenG2PConfig | None = None,
+     backend: PhonemeBackend | None = None,
++    tokens: (
++        Sequence[LinguisticToken | Mapping[str, Any]] | LinguisticToken | Mapping[str, Any] | None
++    ) = None,
++    pronunciation_overrides: Sequence[PronunciationOverride | Mapping[str, Any]]
++    | PronunciationOverride
++    | Mapping[str, Any]
++    | None = None,
+ ) -> PhonemizeResult:
+     """Phonemize prepared text with a temporary frontend.
+
+-    The temporary frontend is closed before returning. Injected backends remain
+-    caller-owned and are not closed.
+-
+-    Parameters
+-    ----------
+-    text:
+-        Prepared, speakable input text.
+-    config:
+-        Optional frontend and eSpeak runtime configuration.
+-    backend:
+-        Optional caller-owned phoneme backend.
+-
+-    Returns
+-    -------
+-    PhonemizeResult
+-        Phoneme details and framed Kitten token IDs.
++    Optional linguistic tokens and explicit IPA spans use the same source
++    resolution as :meth:`KittenG2P.phonemize_prepared`. The temporary frontend
++    is closed before returning; injected backends remain caller-owned.
+     """
+     with KittenG2P(config, backend=backend) as g2p:
+-        return g2p.phonemize_prepared(text)
++        return g2p.phonemize_prepared(
++            text, tokens=tokens, pronunciation_overrides=pronunciation_overrides
++        )
+
+
+ def phonemes(
+diff --git a/kitteng2p/config.py b/kitteng2p/config.py
+index a8f8455..b7ec8a1 100644
+--- a/kitteng2p/config.py
++++ b/kitteng2p/config.py
+@@ -1,26 +1,70 @@
+ from __future__ import annotations
+
++from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
++from pathlib import Path
++from typing import Literal
++
++from .types import G2LexFileRef
++
++
++def _file_refs(value: object) -> tuple[G2LexFileRef, ...]:
++    if value is None:
++        return ()
++    values = (value,) if isinstance(value, (str, Path, G2LexFileRef, Mapping)) else value
++    if not isinstance(values, Sequence):
++        raise TypeError("g2lex_files must be a sequence of paths or G2LexFileRef values")
++    refs: list[G2LexFileRef] = []
++    for item in values:
++        if isinstance(item, G2LexFileRef):
++            refs.append(item)
++        elif isinstance(item, (str, Path)):
++            refs.append(G2LexFileRef(item))
++        elif isinstance(item, Mapping):
++            path = item.get("path")
++            if not isinstance(path, (str, Path)):
++                raise TypeError("each G2Lex file mapping must have a string or Path 'path'")
++            refs.append(
++                G2LexFileRef(
++                    path=path,
++                    sha256=item.get("sha256"),
++                    logical_sha256=item.get("logical_sha256"),
++                )
++            )
++        else:
++            raise TypeError(
++                "g2lex_files items must be paths, G2LexFileRef values, or path mappings"
++            )
++    return tuple(refs)
++
++
++def _selectors(value: object) -> tuple[str, ...] | None:
++    if value is None:
++        return None
++    values = (value,) if isinstance(value, str) else value
++    if not isinstance(values, Sequence):
++        raise TypeError("lexicons must be a selector or a sequence of selectors")
++    result: list[str] = []
++    seen: set[str] = set()
++    for item in values:
++        if not isinstance(item, str) or not item.strip():
++            raise ValueError("lexicon selectors must be non-empty strings")
++        selector = item.strip()
++        key = selector.casefold()
++        if key in seen:
++            raise ValueError(f"duplicate lexicon selector: {selector!r}")
++        seen.add(key)
++        result.append(selector)
++    return tuple(result)
+
+
+ @dataclass(frozen=True, slots=True)
+ class KittenG2PConfig:
+-    """Configure language selection and the eSpeak runtime.
+-
+-    Parameters
+-    ----------
+-    language:
+-        eSpeak voice or language selector. Defaults to ``"en-us"``.
+-    espeak_mode:
+-        Runtime selection: ``"auto"``, ``"native"``, or ``"cli"``.
+-    executable:
+-        Optional explicit eSpeak command-line executable path.
+-    library:
+-        Optional explicit eSpeak shared-library path.
+-    data:
+-        Optional explicit eSpeak data directory.
+-    timeout:
+-        Optional positive runtime timeout in seconds.
++    """Configure eSpeak and optional Kitten-compatible pronunciation sources.
++
++    With no explicitly selected G2Lex sources the frontend retains its original
++    whole-request eSpeak behavior. Named sources are provisioned only when they
++    are selected and the policy is ``"auto"``.
+     """
+
+     language: str = "en-us"
+@@ -29,6 +73,10 @@ class KittenG2PConfig:
+     library: str | None = None
+     data: str | None = None
+     timeout: float | None = None
++    lexicons: tuple[str, ...] | None = None
++    g2lex_files: tuple[G2LexFileRef, ...] = ()
++    lexicon_data_policy: Literal["auto", "installed-only"] = "auto"
++    heteronym_policy: Literal["auto", "off"] = "auto"
+
+     def __post_init__(self) -> None:
+         if self.espeak_mode not in {"auto", "native", "cli"}:
+@@ -37,3 +85,18 @@ class KittenG2PConfig:
+             raise ValueError("language cannot be empty")
+         if self.timeout is not None and self.timeout <= 0:
+             raise ValueError("timeout must be positive")
++        if self.lexicon_data_policy not in {"auto", "installed-only"}:
++            raise ValueError("lexicon_data_policy must be 'auto' or 'installed-only'")
++        if self.heteronym_policy not in {"auto", "off"}:
++            raise ValueError("heteronym_policy must be 'auto' or 'off'")
++
++        lexicons = _selectors(self.lexicons)
++        refs = _file_refs(self.g2lex_files)
++        paths: set[str] = set()
++        for ref in refs:
++            key = str(Path(ref.path).expanduser().resolve()).casefold()
++            if key in paths:
++                raise ValueError(f"duplicate G2Lex file path: {ref.path}")
++            paths.add(key)
++        object.__setattr__(self, "lexicons", lexicons)
++        object.__setattr__(self, "g2lex_files", refs)
+diff --git a/kitteng2p/context.py b/kitteng2p/context.py
+new file mode 100644
+index 0000000..f4ace02
+--- /dev/null
++++ b/kitteng2p/context.py
+@@ -0,0 +1,208 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from .types import LinguisticToken
++
++
++@dataclass(frozen=True, slots=True)
++class ContextResolution:
++    phonemes: str
++    selector: str
++    reason: str
++
++
++def _word(value: str) -> str:
++    return value.casefold().strip(".,!?;:()[]{}\"'“”‘’")
++
++
++def _tag_pos(token: LinguisticToken) -> str | None:
++    if token.pos:
++        pos = token.pos.upper()
++        if pos in {"NOUN", "VERB", "ADJ", "ADV", "AUX", "PROPN", "PRON"}:
++            return pos
++    tag = (token.tag or "").upper()
++    if tag.startswith("NN"):
++        return "NOUN"
++    if tag.startswith("VB"):
++        return "VERB"
++    if tag.startswith("JJ"):
++        return "ADJ"
++    if tag.startswith("RB"):
++        return "ADV"
++    return None
++
++
++def _sense(phonemes: str, sense: str, reason: str) -> ContextResolution:
++    return ContextResolution(phonemes, f"SENSE_{sense.upper()}", reason)
++
++
++def resolve_english_heteronym(
++    token: LinguisticToken,
++    tokens: tuple[LinguisticToken, ...],
++    index: int,
++    *,
++    text: str | None = None,
++) -> ContextResolution | None:
++    """Resolve only well-supported cases of the documented English heteronyms.
++
++    This deliberately small deterministic resolver consumes existing token annotations;
++    it does not infer general POS or introduce an NLP/model dependency.
++    """
++    word = _word(token.text)
++    sentence_start = 0
++    sentence_end = len(text) if text is not None else None
++    if text is not None:
++        left_boundaries = [text.rfind(mark, 0, token.start) for mark in ".!?;:"]
++        sentence_start = max(left_boundaries, default=-1) + 1
++        right_boundaries = [
++            boundary for mark in ".!?;:" if (boundary := text.find(mark, token.end)) >= 0
++        ]
++        sentence_end = min(right_boundaries, default=len(text))
++    left = [
++        _word(item.text)
++        for item in tokens[max(0, index - 5) : index]
++        if item.start >= sentence_start
++    ]
++    right = [
++        _word(item.text)
++        for item in tokens[index + 1 : index + 6]
++        if sentence_end is None or item.start < sentence_end
++    ]
++    context = set(left + right)
++    before = left[-1] if left else ""
++    after = right[0] if right else ""
++    pos = _tag_pos(token)
++    tag = (token.tag or "").upper()
++
++    if word == "bow":
++        if context & {"gesture", "greeting", "polite", "respect", "audience", "curtsy"}:
++            return _sense("baʊ", "gesture", "nearby words indicate a bowing gesture")
++        if context & {"weapon", "arrow", "hunting", "archer", "shoot", "string", "quiver"}:
++            return _sense("boʊ", "weapon", "nearby words indicate a bow weapon")
++    elif word == "bass":
++        if context & {"fish", "fishing", "lake", "river", "aquarium", "caught", "angler"}:
++            return _sense("bæs", "fish", "nearby words indicate the fish")
++        if context & {"music", "musical", "guitar", "singer", "note", "instrument", "band", "song"}:
++            return _sense("beɪs", "music", "nearby words indicate the musical sense")
++    elif word == "minute":
++        if context & {"crack", "detail", "amount", "quantity", "particle", "difference"}:
++            if pos in {None, "ADJ", "NOUN"} or tag in {"JJ", "NN"}:
++                return _sense(
++                    "maɪˈnuːt",
++                    "small",
++                    "the following/context noun indicates the adjective 'tiny'",
++                )
++        if context & {"later", "ago", "wait", "took", "lasted", "elapsed", "hour", "second"}:
++            return _sense("ˈmɪnɪt", "time", "temporal context indicates a unit of time")
++        if after in {"later", "ago"} or before in {"one", "five", "ten", "few", "every"}:
++            return _sense(
++                "ˈmɪnɪt",
++                "time",
++                "quantity or temporal modifier indicates a unit of time",
++            )
++    elif word == "lead":
++        if context & {
++            "metal",
++            "pipe",
++            "pipes",
++            "plumbing",
++            "paint",
++            "poison",
++            "weight",
++            "bullet",
++            "ore",
++        }:
++            return _sense("lɛd", "metal", "nearby words indicate the metal")
++        if context & {
++            "principal",
++            "chief",
++            "main",
++            "leading",
++            "role",
++            "example",
++            "team",
++            "company",
++            "performer",
++        }:
++            return _sense("liːd", "principal", "nearby words indicate the principal/leading sense")
++    elif word == "does":
++        if context & {"deer", "herd", "buck", "fawn", "antler", "wildlife", "doe", "does"}:
++            return _sense("doʊz", "deer", "nearby animal context identifies the plural deer noun")
++        if after in {"not", "n't"} or before in {"she", "he", "it", "what", "who"}:
++            return _sense("dʌz", "auxiliary", "grammatical context identifies the auxiliary")
++        if pos == "AUX" or tag in {"VBZ", "VBP"}:
++            return _sense("dʌz", "auxiliary", "grammatical context identifies the auxiliary")
++    elif word == "refuse":
++        if context & {
++            "rubbish",
++            "garbage",
++            "waste",
++            "trash",
++            "collection",
++            "dump",
++            "bin",
++            "heap",
++            "recycling",
++        }:
++            return _sense(
++                "ˈrɛfjuːs",
++                "noun",
++                "nearby disposal context identifies refuse as rubbish",
++            )
++        if before in {"the", "household", "industrial", "municipal"} and after in {
++            "was",
++            "is",
++            "smelled",
++            "collected",
++            "lay",
++        }:
++            return _sense(
++                "ˈrɛfjuːs",
++                "noun",
++                "determiner and predicate indicate the rubbish noun",
++            )
++        if (
++            pos == "VERB"
++            or tag.startswith("VB")
++            or (
++                before in {"i", "we", "you", "they", "he", "she", "it"}
++                and after in {"to", "the", "a", "an", "help", "offer", "permission"}
++            )
++        ):
++            return _sense(
++                "rɪˈfjuːz",
++                "verb",
++                "grammatical context identifies the action 'decline'",
++            )
++    elif word == "learned":
++        if context & {
++            "scholar",
++            "scholarly",
++            "professor",
++            "academic",
++            "man",
++            "woman",
++            "colleague",
++            "person",
++        }:
++            if before in {"highly", "very", "well", "deeply"} or after in {
++                "scholar",
++                "professor",
++                "academic",
++                "colleague",
++                "man",
++                "woman",
++                "person",
++            }:
++                return _sense(
++                    "ˈlɜːrnɪd",
++                    "adjective",
++                    "descriptive context indicates the scholarly adjective",
++                )
++        if before in {"have", "has", "had", "was", "were", "been", "being"}:
++            return _sense("lɜːrnd", "past", "auxiliary context identifies the past participle")
++    return None
++
++
++__all__ = ["ContextResolution", "resolve_english_heteronym"]
+diff --git a/kitteng2p/lexicons.py b/kitteng2p/lexicons.py
+new file mode 100644
+index 0000000..8a931d0
+--- /dev/null
++++ b/kitteng2p/lexicons.py
+@@ -0,0 +1,440 @@
++from __future__ import annotations
++
++import hashlib
++import os
++import re
++import threading
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import g2lex
++from g2lex import TaggedValue
++from lexphon import DataStore
++from lexphon.catalog import Catalog, CatalogArtifact, load_catalog
++
++from .types import G2LexFileInspection, G2LexFileRef, LexiconDiscoveryResult, NamedLexiconInfo
++
++_IPA_ENCODING = "ipa"
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_CATALOG_LOCK = threading.Lock()
++_CATALOG_CACHE: Catalog | None = None
++
++
++def _language(value: str) -> str:
++    return value.strip().casefold().replace("_", "-")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _normalize_pin(value: str | None, label: str) -> str | None:
++    if value is None:
++        return None
++    normalized = value.strip().casefold().removeprefix("sha256:")
++    if not _SHA256_RE.fullmatch(normalized):
++        raise ValueError(f"{label} must be a 64-character SHA-256 hex digest")
++    return normalized
++
++
++def _manifest_metadata(metadata: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
++    source = metadata.get("source")
++    source = source if isinstance(source, Mapping) else {}
++    language = metadata.get("language") or metadata.get("locale")
++    language = language or source.get("language") or source.get("locale")
++    encoding = metadata.get("phoneme_encoding") or metadata.get("pronunciation_alphabet")
++    encoding = encoding or source.get("phoneme_encoding") or source.get("pronunciation_alphabet")
++    display_name = (
++        metadata.get("display_name") or metadata.get("name") or source.get("display_name")
++    )
++    return (
++        str(language).strip() if isinstance(language, str) and language.strip() else None,
++        str(encoding).strip().casefold()
++        if isinstance(encoding, str) and encoding.strip()
++        else None,
++        str(display_name).strip()
++        if isinstance(display_name, str) and display_name.strip()
++        else None,
++    )
++
++
++def inspect_g2lex_file(path: str | Path) -> G2LexFileInspection:
++    """Inspect a local G2Lex file without registering or installing it."""
++    raw_path = Path(path).expanduser()
++    try:
++        canonical = raw_path.resolve(strict=True)
++        if not canonical.is_file():
++            raise ValueError("path is not a regular file")
++        content_hash = _sha256(canonical)
++        with g2lex.open(canonical) as lexicon:
++            metadata = dict(lexicon.metadata)
++            language, encoding, display_name = _manifest_metadata(metadata)
++            logical_hash = metadata.get("logical_sha256")
++            if not isinstance(logical_hash, str) or not logical_hash:
++                logical_hash = g2lex.logical_sha256(lexicon)
++            compatible = encoding == _IPA_ENCODING
++            reason = (
++                None
++                if compatible
++                else (f"Kitten requires phoneme encoding 'ipa'; file declares {encoding!r}.")
++            )
++            if language is None:
++                reason = "G2Lex file has no language/locale metadata."
++                compatible = False
++            return G2LexFileInspection(
++                valid=True,
++                path=str(canonical),
++                sha256=content_hash,
++                logical_sha256=str(logical_hash),
++                entry_count=len(lexicon),
++                language=language,
++                phoneme_encoding=encoding,
++                display_name=display_name,
++                compatible=compatible,
++                reason=reason,
++                metadata=metadata,
++            )
++    except Exception as exc:
++        try:
++            shown_path = str(raw_path.resolve())
++        except OSError:
++            shown_path = str(raw_path)
++        return G2LexFileInspection(
++            valid=False,
++            path=shown_path,
++            sha256=None,
++            logical_sha256=None,
++            entry_count=0,
++            language=None,
++            phoneme_encoding=None,
++            display_name=None,
++            compatible=False,
++            reason=f"Invalid G2Lex file {shown_path}: {exc}",
++            metadata={},
++        )
++
++
++def _get_catalog(*, offline: bool, refresh: bool) -> Catalog:
++    global _CATALOG_CACHE
++    with _CATALOG_LOCK:
++        if _CATALOG_CACHE is not None and not refresh:
++            return _CATALOG_CACHE
++        if offline:
++            location = os.environ.get("LEXPHON_CATALOG_URL")
++            if location and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", location):
++                catalog = load_catalog(location)
++                _CATALOG_CACHE = catalog
++                return catalog
++            if _CATALOG_CACHE is None:
++                raise RuntimeError(
++                    "No Lexphon catalog is cached for offline discovery; run discovery online "
++                    "once or set LEXPHON_CATALOG_URL to a local catalog file."
++                )
++            return _CATALOG_CACHE
++        catalog = load_catalog()
++        _CATALOG_CACHE = catalog
++        return catalog
++
++
++def _installed_ids(store: DataStore) -> set[str]:
++    return {
++        str(item.get("id"))
++        for item in store.installed()
++        if isinstance(item, Mapping) and item.get("id") is not None
++    }
++
++
++def _named_info(artifact: CatalogArtifact, installed: set[str]) -> NamedLexiconInfo:
++    compatible = artifact.kind == "pronunciation" and artifact.phoneme_encoding == _IPA_ENCODING
++    reason = (
++        None
++        if compatible
++        else (
++            f"Kitten requires a pronunciation lexicon encoded as IPA; this asset uses "
++            f"{artifact.phoneme_encoding!r} ({artifact.kind})."
++        )
++    )
++    asset_id = artifact.asset.get("id") or artifact.asset.get("name")
++    return NamedLexiconInfo(
++        selector=artifact.name,
++        id=artifact.id,
++        language=artifact.language,
++        display_name=artifact.display_name,
++        default=bool(artifact.manifest.get("default", False)),
++        installed=artifact.id in installed,
++        phoneme_encoding=artifact.phoneme_encoding,
++        backend=str(artifact.manifest.get("backend", "lexphon")),
++        asset_id=str(asset_id) if asset_id is not None else artifact.id,
++        data_version=artifact.data_version,
++        logical_sha256=(
++            str(artifact.asset["logical_sha256"])
++            if artifact.asset.get("logical_sha256") is not None
++            else None
++        ),
++        content_sha256=str(artifact.asset["sha256"]),
++        model_support=compatible,
++        compatibility_reason=reason,
++    )
++
++
++def discover_lexicons(
++    language: str = "en-us",
++    *,
++    offline: bool = False,
++    refresh: bool = False,
++    preference: str = "auto",
++) -> LexiconDiscoveryResult:
++    """List catalog sources and installed state without installing any assets."""
++    if not isinstance(language, str) or not language.strip():
++        raise ValueError("language must be a non-empty string")
++    if preference not in {"auto", "catalog", "installed-first"}:
++        raise ValueError("preference must be 'auto', 'catalog', or 'installed-first'")
++    catalog = _get_catalog(offline=offline, refresh=refresh)
++    store = DataStore()
++    installed = _installed_ids(store)
++    entries = tuple(
++        _named_info(item, installed)
++        for item in catalog.for_language(_language(language))
++        if item.kind in {"pronunciation", "membership"}
++    )
++    if preference == "installed-first":
++        entries = tuple(sorted(entries, key=lambda item: (not item.installed, item.selector)))
++    return LexiconDiscoveryResult(language=_language(language), entries=entries)
++
++
++@dataclass(slots=True)
++class LoadedLexiconSource:
++    """An opened, validated G2Lex source and its stable provenance."""
++
++    selector: str
++    source_type: str
++    handle: Any
++    language: str
++    phoneme_encoding: str
++    source_name: str
++    source_path: str | None
++    content_sha256: str
++    logical_sha256: str
++    asset_id: str | None = None
++    data_version: str | None = None
++
++    def close(self) -> None:
++        close = getattr(self.handle, "close", None)
++        if close is not None:
++            close()
++
++    def lookup(self, word: str, selectors: Sequence[str]) -> tuple[str, str | None] | None:
++        try:
++            value = self.handle.get(word)
++        except AttributeError:
++            value = self.handle[word] if word in self.handle else None
++        if value is None:
++            return None
++        if isinstance(value, TaggedValue) or isinstance(value, Mapping):
++            pairs = value.items if isinstance(value, TaggedValue) else tuple(value.items())
++            values = {str(tag).casefold(): pronunciation for tag, pronunciation in pairs}
++            for selector in selectors:
++                pronunciation = values.get(selector.casefold())
++                selected = _first(pronunciation)
++                if selected:
++                    return selected, selector
++            return None
++        selected = _first(value)
++        return (selected, None) if selected else None
++
++
++def _first(value: object) -> str | None:
++    if isinstance(value, str):
++        return value or None
++    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
++        for item in value:
++            if isinstance(item, str) and item:
++                return item
++    return None
++
++
++def _open_checked(
++    path: Path,
++    requested_language: str,
++    *,
++    expected_encoding: str | None = None,
++) -> tuple[Any, str, str, str]:
++    try:
++        handle = g2lex.open(path)
++    except Exception as exc:
++        raise ValueError(f"Invalid G2Lex file {path}: {exc}") from exc
++    try:
++        metadata = handle.metadata
++        language, encoding, _display_name = _manifest_metadata(metadata)
++        if language is None:
++            raise ValueError(f"G2Lex file {path} has no language/locale metadata")
++        if _language(language) != _language(requested_language):
++            raise ValueError(
++                f"G2Lex language metadata conflicts with the request: file is {language}, "
++                f"request is {requested_language}"
++            )
++        if encoding != _IPA_ENCODING:
++            raise ValueError(
++                f"Kitten requires compatible IPA pronunciation data; G2Lex file {path} "
++                f"declares encoding {encoding!r}"
++            )
++        if expected_encoding is not None and encoding != expected_encoding.casefold():
++            raise ValueError(
++                f"G2Lex encoding {encoding!r} does not match catalog encoding {expected_encoding!r}"
++            )
++        logical = metadata.get("logical_sha256")
++        if not isinstance(logical, str) or not logical:
++            logical = g2lex.logical_sha256(handle)
++        return handle, language, encoding, str(logical)
++    except Exception:
++        handle.close()
++        raise
++
++
++def open_g2lex_sources(
++    language: str,
++    local_files: Sequence[G2LexFileRef],
++    lexicons: Sequence[str] | None,
++    data_policy: str,
++) -> tuple[LoadedLexiconSource, ...]:
++    """Open validated local files followed by selected named catalog sources."""
++    loaded: list[LoadedLexiconSource] = []
++    try:
++        for ref in local_files:
++            raw_path = Path(ref.path).expanduser()
++            try:
++                path = raw_path.resolve(strict=True)
++            except FileNotFoundError as exc:
++                raise FileNotFoundError(
++                    f"Configured Kitten G2Lex file does not exist: {raw_path}\n"
++                    "Re-bind the profile with --g2lex PATH."
++                ) from exc
++            if not path.is_file():
++                raise ValueError(f"Configured Kitten G2Lex path is not a file: {path}")
++            content_hash = _sha256(path)
++            expected_hash = _normalize_pin(ref.sha256, "G2Lex content SHA-256 pin")
++            if expected_hash is not None and content_hash != expected_hash:
++                raise ValueError(
++                    "Configured Kitten G2Lex file changed after it was selected.\n"
++                    f"  path:     {path}\n  expected: {expected_hash}\n"
++                    f"  actual:   {content_hash}\n"
++                    "Re-bind or refresh the profile to accept the new content."
++                )
++            handle, source_language, encoding, logical_hash = _open_checked(path, language)
++            expected_logical = _normalize_pin(ref.logical_sha256, "G2Lex logical SHA-256 pin")
++            if expected_logical is not None and logical_hash != expected_logical:
++                handle.close()
++                raise ValueError(
++                    "Configured Kitten G2Lex logical hash does not match its pin.\n"
++                    f"  path:     {path}\n  expected: {expected_logical}\n"
++                    f"  actual:   {logical_hash}"
++                )
++            if _sha256(path) != content_hash:
++                handle.close()
++                raise ValueError(f"G2Lex file changed while it was being opened: {path}")
++            metadata = handle.metadata
++            source_name = str(metadata.get("display_name") or metadata.get("name") or path.name)
++            loaded.append(
++                LoadedLexiconSource(
++                    selector=source_name,
++                    source_type="local-g2lex",
++                    handle=handle,
++                    language=source_language,
++                    phoneme_encoding=encoding,
++                    source_name=str(path),
++                    source_path=str(path),
++                    content_sha256=content_hash,
++                    logical_sha256=logical_hash,
++                    asset_id=None,
++                )
++            )
++
++        if lexicons:
++            catalog = _get_catalog(offline=False, refresh=False)
++            store = DataStore()
++            artifacts = catalog.for_language(_language(language))
++            installed = _installed_ids(store)
++            used_ids: set[str] = set()
++            for selector in lexicons:
++                matches = tuple(
++                    artifact
++                    for artifact in artifacts
++                    if selector.casefold()
++                    in {
++                        artifact.name.casefold(),
++                        artifact.id.casefold(),
++                        artifact.id.split(":", 1)[-1].casefold(),
++                    }
++                )
++                if not matches:
++                    available = ", ".join(sorted(item.name for item in artifacts)) or "none"
++                    raise ValueError(
++                        f"Kitten lexicon {selector!r} is not available for {language}.\n"
++                        f"Available selectors: {available}\n"
++                        "Run: voicerender lexicons list --engine kitten --lang " + language
++                    )
++                if len(matches) != 1:
++                    raise ValueError(f"Kitten lexicon selector {selector!r} is ambiguous")
++                artifact = matches[0]
++                if artifact.id in used_ids:
++                    raise ValueError(f"duplicate Kitten lexicon selector: {selector!r}")
++                used_ids.add(artifact.id)
++                if artifact.kind != "pronunciation" or artifact.phoneme_encoding != _IPA_ENCODING:
++                    raise ValueError(
++                        f"Kitten cannot use lexicon {artifact.id!r}: phoneme encoding "
++                        f"{artifact.phoneme_encoding!r} is not supported. Kitten requires a "
++                        "compatible IPA pronunciation source."
++                    )
++                if artifact.id in installed:
++                    path = store.path(artifact.id)
++                elif data_policy == "installed-only":
++                    raise ValueError(
++                        f"Kitten lexicon {artifact.id!r} is not installed; "
++                        "install it or use lexicon_data_policy='auto'."
++                    )
++                else:
++                    path = store.install(artifact)
++                actual_hash = _sha256(path)
++                expected_asset_hash = str(artifact.asset["sha256"])
++                if actual_hash != expected_asset_hash:
++                    raise ValueError(
++                        f"Installed Kitten lexicon {artifact.id!r} failed its content hash check"
++                    )
++                handle, source_language, encoding, logical_hash = _open_checked(
++                    path, language, expected_encoding=artifact.phoneme_encoding
++                )
++                expected_logical = artifact.asset.get("logical_sha256")
++                if expected_logical is not None and logical_hash != expected_logical:
++                    handle.close()
++                    raise ValueError(
++                        f"Installed Kitten lexicon {artifact.id!r} failed its logical hash check"
++                    )
++                loaded.append(
++                    LoadedLexiconSource(
++                        selector=artifact.name,
++                        source_type="named-g2lex",
++                        handle=handle,
++                        language=source_language,
++                        phoneme_encoding=encoding,
++                        source_name=artifact.id,
++                        source_path=str(path),
++                        content_sha256=actual_hash,
++                        logical_sha256=logical_hash,
++                        asset_id=artifact.id,
++                        data_version=artifact.data_version,
++                    )
++                )
++        return tuple(loaded)
++    except Exception:
++        for source in reversed(loaded):
++            source.close()
++        raise
++
++
++__all__ = ["discover_lexicons", "inspect_g2lex_file"]
+diff --git a/kitteng2p/types.py b/kitteng2p/types.py
+index 960edc0..1d61ef4 100644
+--- a/kitteng2p/types.py
++++ b/kitteng2p/types.py
+@@ -1,6 +1,132 @@
+ from __future__ import annotations
+
++from collections.abc import Mapping
+ from dataclasses import dataclass
++from pathlib import Path
++from typing import Literal
++
++
++@dataclass(frozen=True, slots=True)
++class G2LexFileRef:
++    path: str | Path
++    sha256: str | None = None
++    logical_sha256: str | None = None
++
++    def __post_init__(self) -> None:
++        if not str(self.path).strip():
++            raise ValueError("G2Lex file path cannot be empty")
++        for label, value in (("sha256", self.sha256), ("logical_sha256", self.logical_sha256)):
++            if value is None:
++                continue
++            if not isinstance(value, str):
++                raise TypeError(f"G2Lex {label} must be a string")
++            normalized = value.strip().casefold().removeprefix("sha256:")
++            if len(normalized) != 64:
++                raise ValueError(f"G2Lex {label} must be a 64-character SHA-256 digest")
++            try:
++                int(normalized, 16)
++            except ValueError as exc:
++                raise ValueError(f"G2Lex {label} must be a hexadecimal SHA-256 digest") from exc
++            object.__setattr__(self, label, normalized)
++
++
++@dataclass(frozen=True, slots=True)
++class LinguisticToken:
++    start: int
++    end: int
++    text: str
++    pos: str | None = None
++    tag: str | None = None
++    lemma: str | None = None
++    morph: str | None = None
++    language: str | None = None
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.start, int) or not isinstance(self.end, int):
++            raise TypeError("linguistic token start/end offsets must be integers")
++        if self.start < 0 or self.end <= self.start:
++            raise ValueError("linguistic token span must satisfy 0 <= start < end")
++        if not self.text:
++            raise ValueError("linguistic token text cannot be empty")
++
++
++@dataclass(frozen=True, slots=True)
++class PronunciationOverride:
++    start: int
++    end: int
++    phonemes: str
++    language: str | None = None
++    alphabet: str = "ipa"
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.start, int) or not isinstance(self.end, int):
++            raise TypeError("pronunciation override start/end offsets must be integers")
++        if self.start < 0 or self.end <= self.start:
++            raise ValueError("pronunciation override span must satisfy 0 <= start < end")
++        if not isinstance(self.phonemes, str) or not self.phonemes.strip():
++            raise ValueError("pronunciation override phonemes cannot be empty")
++        if self.alphabet.casefold() != "ipa":
++            raise ValueError("Kitten pronunciation overrides must use the 'ipa' alphabet")
++
++
++@dataclass(frozen=True, slots=True)
++class PronunciationTrace:
++    text: str
++    start: int
++    end: int
++    phonemes: str
++    source: Literal["explicit", "local-g2lex", "named-g2lex", "context-rule", "espeak"]
++    source_name: str | None = None
++    sha256: str | None = None
++    logical_sha256: str | None = None
++    selector: str | None = None
++    reason: str | None = None
++
++
++@dataclass(frozen=True, slots=True)
++class PronunciationDiagnostic:
++    code: str
++    message: str
++    severity: Literal["info", "warning", "error"] = "warning"
++
++
++@dataclass(frozen=True, slots=True)
++class NamedLexiconInfo:
++    selector: str
++    id: str
++    language: str
++    display_name: str
++    default: bool
++    installed: bool
++    phoneme_encoding: str
++    backend: str
++    asset_id: str
++    data_version: str
++    logical_sha256: str | None
++    content_sha256: str
++    model_support: bool
++    compatibility_reason: str | None = None
++
++
++@dataclass(frozen=True, slots=True)
++class LexiconDiscoveryResult:
++    language: str
++    entries: tuple[NamedLexiconInfo, ...]
++
++
++@dataclass(frozen=True, slots=True)
++class G2LexFileInspection:
++    valid: bool
++    path: str
++    sha256: str | None
++    logical_sha256: str | None
++    entry_count: int
++    language: str | None
++    phoneme_encoding: str | None
++    display_name: str | None
++    compatible: bool
++    reason: str | None
++    metadata: Mapping[str, object]
+
+
+ @dataclass(frozen=True, slots=True)
+@@ -36,6 +162,8 @@ class PhonemizeResult:
+     token_ids: tuple[int, ...]
+     language: str
+     dropped_symbols: tuple[str, ...] = ()
++    pronunciation_trace: tuple[PronunciationTrace, ...] = ()
++    diagnostics: tuple[PronunciationDiagnostic, ...] = ()
+
+     @property
+     def ids(self) -> tuple[int, ...]:
+diff --git a/pyproject.toml b/pyproject.toml
+index 647522c..59d3b7a 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -17,6 +17,8 @@ authors = [{name = "kitteng2p contributors"}]
+ keywords = ["tts", "kitten", "kittentts", "g2p", "phonemizer", "espeak", "onnx"]
+ dependencies = [
+   "espeakng-runtime>=0.1.5,<0.2",
++  "g2lex>=0.1.8,<0.2.0",
++  "lexphon>=0.2.5,<0.3",
+ ]
+ classifiers = [
+   "Development Status :: 3 - Alpha",
+diff --git a/tests/fixtures/heteronym_evaluation.json b/tests/fixtures/heteronym_evaluation.json
+new file mode 100644
+index 0000000..3a402a9
+--- /dev/null
++++ b/tests/fixtures/heteronym_evaluation.json
+@@ -0,0 +1,30 @@
++[
++  {
++    "id": "T20",
++    "text": "A minute later, we returned.",
++    "word": "minute",
++    "expected_ipa": "ˈmɪnɪt",
++    "selector": "SENSE_TIME"
++  },
++  {
++    "id": "T21",
++    "text": "A minute crack appeared in the glass.",
++    "word": "minute",
++    "expected_ipa": "maɪˈnuːt",
++    "selector": "SENSE_SMALL"
++  },
++  {
++    "id": "T22",
++    "text": "A polite bow to the audience.",
++    "word": "bow",
++    "expected_ipa": "baʊ",
++    "selector": "SENSE_GESTURE"
++  },
++  {
++    "id": "T23",
++    "text": "The hunting bow uses an arrow.",
++    "word": "bow",
++    "expected_ipa": "boʊ",
++    "selector": "SENSE_WEAPON"
++  }
++]
+diff --git a/tests/test_config.py b/tests/test_config.py
+index 1c1ab76..a852e2f 100644
+--- a/tests/test_config.py
++++ b/tests/test_config.py
+@@ -1,6 +1,6 @@
+ import pytest
+
+-from kitteng2p import KittenG2PConfig
++from kitteng2p import G2LexFileRef, KittenG2PConfig
+
+
+ def test_defaults():
+@@ -43,3 +43,36 @@ def test_positive_timeout_and_explicit_paths_are_preserved():
+     assert config.library == "/opt/libespeak-ng.so"
+     assert config.data == "/opt/espeak-ng-data"
+     assert config.timeout == 2.5
++
++
++def test_public_lexicon_inputs_are_normalized_and_behavior_compatible():
++    config = KittenG2PConfig(
++        lexicons="lexhint",
++        g2lex_files=(
++            {
++                "path": "./pronunciations.g2lex",
++                "sha256": "A" * 64,
++                "logical_sha256": "B" * 64,
++            },
++        ),
++    )
++
++    assert config.lexicons == ("lexhint",)
++    assert config.g2lex_files == (
++        G2LexFileRef(
++            path="./pronunciations.g2lex",
++            sha256="a" * 64,
++            logical_sha256="b" * 64,
++        ),
++    )
++    assert config.lexicon_data_policy == "auto"
++    assert config.heteronym_policy == "auto"
++
++
++def test_duplicate_selectors_and_invalid_policies_are_rejected():
++    with pytest.raises(ValueError, match="duplicate lexicon selector"):
++        KittenG2PConfig(lexicons=("lexhint", "LEXHINT"))
++    with pytest.raises(ValueError, match="lexicon_data_policy"):
++        KittenG2PConfig(lexicon_data_policy="always-download")
++    with pytest.raises(ValueError, match="heteronym_policy"):
++        KittenG2PConfig(heteronym_policy="guess")
+diff --git a/tests/test_g2lex_sources.py b/tests/test_g2lex_sources.py
+new file mode 100644
+index 0000000..44c67b6
+--- /dev/null
++++ b/tests/test_g2lex_sources.py
+@@ -0,0 +1,165 @@
++from __future__ import annotations
++
++import hashlib
++from pathlib import Path
++
++import pytest
++from g2lex import TaggedValue
++from g2lex.format import pack_typed
++
++from kitteng2p import (
++    G2LexFileRef,
++    KittenG2P,
++    KittenG2PConfig,
++    LinguisticToken,
++    inspect_g2lex_file,
++)
++
++
++class FakeBackend:
++    def __init__(self, output: str = "ə") -> None:
++        self.output = output
++        self.calls: list[str] = []
++        self.closed = False
++
++    def phonemize(self, text: str, *, language: str) -> str:
++        assert language.casefold() == "en-us"
++        self.calls.append(text)
++        return self.output
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def write_lexicon(
++    path: Path,
++    entries: dict[str, object],
++    *,
++    language: str = "en-US",
++    encoding: str = "ipa",
++) -> Path:
++    path.write_bytes(
++        pack_typed(
++            entries,  # type: ignore[arg-type]
++            metadata={
++                "language": language,
++                "phoneme_encoding": encoding,
++                "display_name": path.stem,
++            },
++        )
++    )
++    return path
++
++
++def test_inspection_reports_content_and_logical_hashes(tmp_path: Path):
++    path = write_lexicon(tmp_path / "words.g2lex", {"read": "ɹɛd"})
++
++    inspection = inspect_g2lex_file(path)
++
++    assert inspection.valid is True
++    assert inspection.compatible is True
++    assert inspection.path == str(path.resolve())
++    assert inspection.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
++    assert inspection.logical_sha256
++    assert inspection.entry_count == 1
++    assert inspection.language == "en-US"
++    assert inspection.phoneme_encoding == "ipa"
++
++
++def test_local_sources_preserve_order_and_exact_tag_precedes_pos_and_default(tmp_path: Path):
++    first = write_lexicon(
++        tmp_path / "first.g2lex",
++        {"read": TaggedValue((("VBN", "ɹɛd"), ("VERB", "ɹiːd"), ("DEFAULT", "ɹɪd")))},
++    )
++    second = write_lexicon(tmp_path / "second.g2lex", {"read": "ɹiːd"})
++    backend = FakeBackend()
++    token = LinguisticToken(0, 4, "read", pos="VERB", tag="VBN")
++
++    with KittenG2P(KittenG2PConfig(g2lex_files=(first, second)), backend=backend) as g2p:
++        result = g2p.phonemize_prepared("read!", tokens=(token,))
++
++    assert result.raw_phonemes == "ɹɛd!"
++    assert result.pronunciation_trace[0].source == "local-g2lex"
++    assert result.pronunciation_trace[0].selector == "VBN"
++    assert result.pronunciation_trace[0].source_name == str(first.resolve())
++    assert result.pronunciation_trace[0].sha256 == hashlib.sha256(first.read_bytes()).hexdigest()
++    assert backend.calls == []
++
++
++def test_parent_pos_selector_precedes_default(tmp_path: Path):
++    path = write_lexicon(
++        tmp_path / "tagged.g2lex",
++        {"read": TaggedValue((("VERB", "ɹiːd"), ("DEFAULT", "ɹɛd")))},
++    )
++    token = LinguisticToken(0, 4, "read", pos="VERB", tag="VBN")
++
++    with KittenG2P(KittenG2PConfig(g2lex_files=(path,)), backend=FakeBackend()) as g2p:
++        result = g2p.phonemize_prepared("read", tokens=(token,))
++
++    assert result.raw_phonemes == "ɹiːd"
++    assert result.pronunciation_trace[0].selector == "VERB"
++
++
++def test_local_file_hash_pin_and_incompatible_metadata_fail_clearly(tmp_path: Path):
++    path = write_lexicon(tmp_path / "pinned.g2lex", {"read": "ɹɛd"})
++    wrong_hash = "0" * 64
++    with pytest.raises(ValueError, match="changed after it was selected"):
++        KittenG2P(
++            KittenG2PConfig(g2lex_files=(G2LexFileRef(path, sha256=wrong_hash),)),
++            backend=FakeBackend(),
++        )
++
++    wrong_language = write_lexicon(
++        tmp_path / "wrong-language.g2lex", {"read": "ɹɛd"}, language="fr-FR"
++    )
++    with pytest.raises(ValueError, match="language metadata conflicts"):
++        KittenG2P(KittenG2PConfig(g2lex_files=(wrong_language,)), backend=FakeBackend())
++
++    wrong_encoding = write_lexicon(
++        tmp_path / "wrong-encoding.g2lex", {"read": "ɹɛd"}, encoding="kokoro-v1"
++    )
++    inspection = inspect_g2lex_file(wrong_encoding)
++    assert inspection.valid is True
++    assert inspection.compatible is False
++    with pytest.raises(ValueError, match="requires compatible IPA"):
++        KittenG2P(KittenG2PConfig(g2lex_files=(wrong_encoding,)), backend=FakeBackend())
++
++
++def test_unsupported_selected_ipa_is_rejected_instead_of_truncated(tmp_path: Path):
++    path = write_lexicon(tmp_path / "bad-ipa.g2lex", {"read": "☃"})
++    with KittenG2P(KittenG2PConfig(g2lex_files=(path,)), backend=FakeBackend()) as g2p:
++        with pytest.raises(ValueError, match="unsupported Kitten phoneme symbol"):
++            g2p.phonemize_prepared("read")
++
++
++def test_duplicate_local_paths_are_rejected(tmp_path: Path):
++    path = tmp_path / "same.g2lex"
++    with pytest.raises(ValueError, match="duplicate G2Lex file path"):
++        KittenG2PConfig(g2lex_files=(path, path.parent / "." / path.name))
++
++
++def test_context_selector_precedes_default_in_tagged_entry(tmp_path: Path):
++    path = write_lexicon(
++        tmp_path / "context.g2lex",
++        {"minute": TaggedValue((("SENSE_SMALL", "maɪˈnuːt"), ("DEFAULT", "ˈmɪnɪt")))},
++    )
++
++    with KittenG2P(KittenG2PConfig(g2lex_files=(path,)), backend=FakeBackend()) as g2p:
++        result = g2p.phonemize_prepared("A minute crack.")
++
++    trace = next(item for item in result.pronunciation_trace if item.text == "minute")
++    assert trace.source == "local-g2lex"
++    assert trace.selector == "SENSE_SMALL"
++    assert trace.phonemes == "maɪˈnuːt"
++
++
++def test_source_miss_falls_back_to_one_whole_request_espeak_call(tmp_path: Path):
++    path = write_lexicon(tmp_path / "other.g2lex", {"unmatched": "ˈʌnˌmætʃt"})
++    backend = FakeBackend("eɪˈspiːk")
++
++    with KittenG2P(KittenG2PConfig(g2lex_files=(path,)), backend=backend) as g2p:
++        result = g2p.phonemize_prepared("Read, then wait!")
++
++    assert backend.calls == ["Read, then wait!"]
++    assert result.raw_phonemes == "eɪˈspiːk"
++    assert [item.source for item in result.pronunciation_trace] == ["espeak", "espeak", "espeak"]
+diff --git a/tests/test_heteronym_context.py b/tests/test_heteronym_context.py
+new file mode 100644
+index 0000000..e719588
+--- /dev/null
++++ b/tests/test_heteronym_context.py
+@@ -0,0 +1,75 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from kitteng2p import KittenG2P, LinguisticToken
++
++
++class FakeBackend:
++    def phonemize(self, text: str, *, language: str) -> str:
++        return "fallback"
++
++    def close(self) -> None:
++        pass
++
++
++def _result(text: str, word: str, *, pos: str | None = None, tag: str | None = None):
++    start = text.index(word)
++    token = LinguisticToken(start, start + len(word), word, pos=pos, tag=tag, lemma=word.casefold())
++    with KittenG2P(backend=FakeBackend()) as g2p:
++        return g2p.phonemize_prepared(text, tokens=(token,))
++
++
++_CORRECTED_EVALUATION = json.loads(
++    (Path(__file__).parent / "fixtures" / "heteronym_evaluation.json").read_text(encoding="utf-8")
++)
++_CONTEXT_CASES = [
++    pytest.param(
++        case["text"],
++        case["word"],
++        case["expected_ipa"],
++        case["selector"],
++        id=case["id"],
++    )
++    for case in _CORRECTED_EVALUATION
++]
++_CONTEXT_CASES.extend(
++    [
++        ("The bass played music with the band.", "bass", "beɪs", "SENSE_MUSIC"),
++        ("A bass fish swam in the lake.", "bass", "bæs", "SENSE_FISH"),
++        ("The lead role was important.", "lead", "liːd", "SENSE_PRINCIPAL"),
++        ("Lead pipes contain a toxic metal.", "Lead", "lɛd", "SENSE_METAL"),
++        ("Does wandered through the herd of deer.", "Does", "doʊz", "SENSE_DEER"),
++        ("She does not agree.", "does", "dʌz", "SENSE_AUXILIARY"),
++        ("The refuse was collected with the rubbish.", "refuse", "ˈrɛfjuːs", "SENSE_NOUN"),
++        ("They refuse the offer.", "refuse", "rɪˈfjuːz", "SENSE_VERB"),
++        ("The highly learned scholar spoke.", "learned", "ˈlɜːrnɪd", "SENSE_ADJECTIVE"),
++        ("They had learned the lesson.", "learned", "lɜːrnd", "SENSE_PAST"),
++    ]
++)
++
++
++@pytest.mark.parametrize(("text", "word", "expected", "selector"), _CONTEXT_CASES)
++def test_known_heteronyms_have_traceable_contextual_pronunciations(
++    text: str, word: str, expected: str, selector: str
++):
++    result = _result(text, word)
++    trace = next(
++        item for item in result.pronunciation_trace if item.text.casefold() == word.casefold()
++    )
++
++    assert trace.source == "context-rule"
++    assert trace.phonemes == expected
++    assert trace.selector == selector
++    assert trace.reason
++    assert trace.phonemes in result.phonemes
++
++
++def test_context_cues_do_not_cross_sentence_boundaries():
++    result = _result("We saw a bow. The gesture was polite.", "bow")
++    trace = next(item for item in result.pronunciation_trace if item.text.casefold() == "bow")
++
++    assert trace.source == "espeak"
+diff --git a/tests/test_lexicon_discovery.py b/tests/test_lexicon_discovery.py
+new file mode 100644
+index 0000000..4f772a1
+--- /dev/null
++++ b/tests/test_lexicon_discovery.py
+@@ -0,0 +1,166 @@
++from __future__ import annotations
++
++import hashlib
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++from g2lex.format import pack_typed
++
++import kitteng2p.lexicons as lexicons_module
++from kitteng2p import KittenG2P, KittenG2PConfig, discover_lexicons
++
++
++class FakeBackend:
++    def phonemize(self, text: str, *, language: str) -> str:
++        return "fallback"
++
++    def close(self) -> None:
++        pass
++
++
++class FakeCatalog:
++    def __init__(self, artifacts):
++        self.artifacts = tuple(artifacts)
++
++    def for_language(self, language: str):
++        key = language.casefold().replace("_", "-")
++        return tuple(
++            artifact
++            for artifact in self.artifacts
++            if artifact.language.casefold().replace("_", "-") == key
++        )
++
++
++def make_artifact(path: Path, name: str, *, encoding: str = "ipa"):
++    language = "en-US"
++    path.write_bytes(
++        pack_typed(
++            {"word": f"{name}ɪ"},
++            metadata={"language": language, "phoneme_encoding": encoding},
++        )
++    )
++    return SimpleNamespace(
++        id=f"en-us:{name}",
++        language=language,
++        name=name,
++        display_name=f"{name.title()} pronunciations",
++        kind="pronunciation",
++        phoneme_encoding=encoding,
++        data_version="1.0.0",
++        manifest={"default": name == "first"},
++        asset={"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "name": path.name},
++        path=path,
++    )
++
++
++class FakeStore:
++    instances = []
++    current = None
++
++    def __init__(self):
++        self.instances.append(self)
++        self.installs: list[str] = []
++        self.paths = {item.id: item.path for item in self.current.artifacts}
++        self.installed_ids: set[str] = set()
++
++    def installed(self):
++        return tuple({"id": item} for item in sorted(self.installed_ids))
++
++    def path(self, identifier: str) -> Path:
++        if identifier not in self.installed_ids:
++            from lexphon import LexiconNotInstalledError
++
++            raise LexiconNotInstalledError(identifier)
++        return self.paths[identifier]
++
++    def install(self, artifact) -> Path:
++        self.installs.append(artifact.id)
++        self.installed_ids.add(artifact.id)
++        return self.paths[artifact.id]
++
++
++def _install_fakes(monkeypatch, artifacts):
++    FakeStore.instances.clear()
++    catalog = FakeCatalog(artifacts)
++    FakeStore.current = catalog
++    monkeypatch.setattr(lexicons_module, "_get_catalog", lambda **_: catalog)
++    monkeypatch.setattr(lexicons_module, "DataStore", FakeStore)
++    return catalog
++
++
++def test_discovery_lists_metadata_and_compatibility_without_installing(tmp_path: Path, monkeypatch):
++    good = make_artifact(tmp_path / "ipa.g2lex", "ipa")
++    bad = make_artifact(tmp_path / "kokoro.g2lex", "kokoro", encoding="kokoro-v1")
++    _install_fakes(monkeypatch, (good, bad))
++
++    result = discover_lexicons("en-US")
++
++    assert [entry.selector for entry in result.entries] == ["ipa", "kokoro"]
++    assert result.entries[0].model_support is True
++    assert result.entries[0].installed is False
++    assert result.entries[1].model_support is False
++    assert "kokoro-v1" in result.entries[1].compatibility_reason
++    assert FakeStore.instances[-1].installs == []
++
++
++def test_auto_policy_installs_only_the_selected_named_source(tmp_path: Path, monkeypatch):
++    selected = make_artifact(tmp_path / "selected.g2lex", "selected")
++    unused = make_artifact(tmp_path / "unused.g2lex", "unused")
++    _install_fakes(monkeypatch, (selected, unused))
++
++    with KittenG2P(
++        KittenG2PConfig(lexicons=("selected",), lexicon_data_policy="auto"),
++        backend=FakeBackend(),
++    ) as g2p:
++        result = g2p.phonemize_prepared("word")
++
++    assert FakeStore.instances[-1].installs == [selected.id]
++    assert result.raw_phonemes == "selectedɪ"
++    assert result.pronunciation_trace[0].source == "named-g2lex"
++    assert result.pronunciation_trace[0].source_name == selected.id
++    assert FakeStore.current is not None
++
++
++def test_installed_only_never_provisions_a_missing_named_source(tmp_path: Path, monkeypatch):
++    selected = make_artifact(tmp_path / "selected.g2lex", "selected")
++    _install_fakes(monkeypatch, (selected,))
++
++    with pytest.raises(ValueError, match="is not installed"):
++        KittenG2P(
++            KittenG2PConfig(lexicons=("selected",), lexicon_data_policy="installed-only"),
++            backend=FakeBackend(),
++        )
++
++    assert FakeStore.instances[-1].installs == []
++
++
++def test_local_files_precede_ordered_named_sources(tmp_path: Path, monkeypatch):
++    first = make_artifact(tmp_path / "first.g2lex", "first")
++    second = make_artifact(tmp_path / "second.g2lex", "second")
++    _install_fakes(monkeypatch, (first, second))
++    local = tmp_path / "local.g2lex"
++    local.write_bytes(
++        pack_typed(
++            {"word": "loʊkəl"},
++            metadata={"language": "en-US", "phoneme_encoding": "ipa"},
++        )
++    )
++
++    with KittenG2P(
++        KittenG2PConfig(g2lex_files=(local,), lexicons=("first", "second")),
++        backend=FakeBackend(),
++    ) as g2p:
++        local_result = g2p.phonemize_prepared("word")
++    assert local_result.raw_phonemes == "loʊkəl"
++    assert local_result.pronunciation_trace[0].source == "local-g2lex"
++
++    with KittenG2P(
++        KittenG2PConfig(lexicons=("first", "second")),
++        backend=FakeBackend(),
++    ) as g2p:
++        named_result = g2p.phonemize_prepared("word")
++
++    assert named_result.raw_phonemes == "firstɪ"
++    assert named_result.pronunciation_trace[0].source_name == first.id
++    assert FakeStore.instances[-1].installs == [first.id, second.id]
+diff --git a/tests/test_pronunciation_overrides.py b/tests/test_pronunciation_overrides.py
+new file mode 100644
+index 0000000..ea49d2e
+--- /dev/null
++++ b/tests/test_pronunciation_overrides.py
+@@ -0,0 +1,90 @@
++from __future__ import annotations
++
++import pytest
++
++from kitteng2p import (
++    KittenG2P,
++    KittenG2PConfig,
++    LinguisticToken,
++    PronunciationOverride,
++)
++
++
++class FakeBackend:
++    def __init__(self) -> None:
++        self.calls: list[str] = []
++
++    def phonemize(self, text: str, *, language: str) -> str:
++        assert language == "en-us"
++        self.calls.append(text)
++        return "həloʊ"
++
++    def close(self) -> None:
++        pass
++
++
++def test_explicit_span_overrides_context_and_keeps_punctuation():
++    backend = FakeBackend()
++    text = "Hello, bow!"
++    start = text.index("bow")
++    token = LinguisticToken(start, start + 3, "bow")
++    override = PronunciationOverride(start, start + 3, "baʊ")
++
++    with KittenG2P(KittenG2PConfig(), backend=backend) as g2p:
++        result = g2p.phonemize_prepared(
++            text,
++            tokens=(token,),
++            pronunciation_overrides=(override,),
++        )
++
++    assert result.raw_phonemes == "həloʊ, baʊ!"
++    assert result.phonemes.count(",") == 1
++    assert result.phonemes.count("!") == 1
++    assert result.pronunciation_trace[-1].source == "explicit"
++    assert result.pronunciation_trace[-1].text == "bow"
++    assert backend.calls == ["Hello, "]
++    assert result.token_ids[0] == 0
++    assert result.token_ids[-2:] == (10, 0)
++
++
++def test_invalid_offsets_overlap_and_unsupported_symbols_fail():
++    with KittenG2P(backend=FakeBackend()) as g2p:
++        with pytest.raises(ValueError, match="does not match source text"):
++            g2p.phonemize_prepared(
++                "bow",
++                tokens=(LinguisticToken(0, 3, "bass"),),
++            )
++        with pytest.raises(ValueError, match="must cover one or more complete source words"):
++            g2p.phonemize_prepared(
++                "bow",
++                pronunciation_overrides=(PronunciationOverride(1, 3, "baʊ"),),
++            )
++        with pytest.raises(ValueError, match="must not overlap"):
++            g2p.phonemize_prepared(
++                "bow bass",
++                pronunciation_overrides=(
++                    PronunciationOverride(0, 3, "baʊ"),
++                    PronunciationOverride(2, 6, "bæs"),
++                ),
++            )
++        with pytest.raises(ValueError, match="unsupported Kitten phoneme symbol"):
++            g2p.phonemize_prepared(
++                "bow",
++                pronunciation_overrides=(PronunciationOverride(0, 3, "☃"),),
++            )
++
++
++def test_fallback_runs_keep_clause_punctuation_without_extra_sentence_marks():
++    backend = FakeBackend()
++    text = "Hello, bow!"
++    start = text.index("bow")
++
++    with KittenG2P(backend=backend) as g2p:
++        result = g2p.phonemize_prepared(
++            text,
++            pronunciation_overrides=(PronunciationOverride(start, start + 3, "baʊ"),),
++        )
++
++    assert result.phonemes.count(",") == 1
++    assert result.phonemes.count("!") == 1
++    assert backend.calls == ["Hello, "]

@@ -1,0 +1,46 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: 0.1.2
+git_base_ref: v0.1.1
+git_base_sha: 1d3c930d348920035af93544d673e2ca05dc9430
+git_head_ref: HEAD
+git_head_sha: 5746236b6f7c81af019ea368e7d895ccf639d213
+git_range: 1d3c930d348920035af93544d673e2ca05dc9430..5746236b6f7c81af019ea368e7d895ccf639d213
+commit_count: 1
+rows:
+  - sha: 5746236b6f7c81af019ea368e7d895ccf639d213
+    source_ref: git:5746236b6f7c81af019ea368e7d895ccf639d213
+    short_sha: "5746236"
+    changed_paths:
+      - README.md
+      - docs/api.md
+      - docs/architecture.md
+      - docs/compatibility.md
+      - docs/quickstart.md
+      - kitteng2p/__init__.py
+      - kitteng2p/api.py
+      - kitteng2p/config.py
+      - kitteng2p/context.py
+      - kitteng2p/lexicons.py
+      - kitteng2p/types.py
+      - pyproject.toml
+      - tests/fixtures/heteronym_evaluation.json
+      - tests/test_config.py
+      - tests/test_g2lex_sources.py
+      - tests/test_heteronym_context.py
+      - tests/test_lexicon_discovery.py
+      - tests/test_pronunciation_overrides.py
+    stats:
+      files_changed: 18
+      insertions: 2045
+      deletions: 85
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add g2lex support"

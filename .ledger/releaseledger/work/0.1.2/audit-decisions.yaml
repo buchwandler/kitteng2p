@@ -1,0 +1,29 @@
+rows:
+  - sha: 5746236b6f7c81af019ea368e7d895ccf639d213
+    inspected: true
+    inspected_paths:
+      - README.md
+      - docs/api.md
+      - docs/architecture.md
+      - docs/compatibility.md
+      - docs/quickstart.md
+      - kitteng2p/__init__.py
+      - kitteng2p/api.py
+      - kitteng2p/config.py
+      - kitteng2p/context.py
+      - kitteng2p/lexicons.py
+      - kitteng2p/types.py
+      - pyproject.toml
+      - tests/fixtures/heteronym_evaluation.json
+      - tests/test_config.py
+      - tests/test_g2lex_sources.py
+      - tests/test_heteronym_context.py
+      - tests/test_lexicon_discovery.py
+      - tests/test_pronunciation_overrides.py
+    observed_behavior: "Adds opt-in local and named G2Lex pronunciation sources with IPA validation, hash pinning, precedence, lexicon discovery/inspection, contextual heteronym resolution, request-local pronunciation overrides, and traceable pronunciation diagnostics. Documents the new public configuration and API surface and adds focused coverage."
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: "Reviewed implementation, public docs, dependency changes, and focused tests."
+    stale: false

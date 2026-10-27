@@ -1,0 +1,12 @@
+rows:
+  - sha: 1d3c930d348920035af93544d673e2ca05dc9430
+    inspected: true
+    inspected_paths:
+      - .github/workflows/python-publish.yml
+    observed_behavior: "The PyPI publishing workflow pins the publish action to v1.14.1, passes the PyPI API token, and disables attestations."
+    public_impact: internal
+    decision: internal
+    target_entry_key: null
+    target_entry_id: null
+    notes: "CI-only release plumbing; no public product behavior change."
+    stale: false

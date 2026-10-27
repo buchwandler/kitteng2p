@@ -1,0 +1,33 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 2
+release_version: 0.1.1
+git_base_ref: v0.1.0
+git_base_sha: 95f8613e419c0bbce67d043e34a8b6cdf99ec5f8
+git_head_ref: v0.1.1
+git_head_sha: 1d3c930d348920035af93544d673e2ca05dc9430
+git_range: 95f8613e419c0bbce67d043e34a8b6cdf99ec5f8..1d3c930d348920035af93544d673e2ca05dc9430
+commit_count: 1
+rows:
+  - sha: 1d3c930d348920035af93544d673e2ca05dc9430
+    source_ref: git:1d3c930d348920035af93544d673e2ca05dc9430
+    short_sha: 1d3c930
+    changed_paths:
+      - .github/workflows/python-publish.yml
+    stats:
+      files_changed: 1
+      insertions: 4
+      deletions: 1
+    inspected: true
+    inspected_paths:
+      - .github/workflows/python-publish.yml
+    observed_behavior:
+      The PyPI publishing workflow pins the publish action to v1.14.1,
+      passes the PyPI API token, and disables attestations.
+    public_impact: internal
+    decision: internal
+    stale: false
+    evidence_subject: "chore: fix ci"
+    notes: CI-only release plumbing; no public product behavior change.

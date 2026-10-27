@@ -1,0 +1,42 @@
+{
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "additions": 2045,
+      "deletions": 85,
+      "patch_file": "5746236.patch",
+      "patch_sha256": "f89bc69972de7f3bc7a43d896ea439737b786ba59b4f8eda5879ea766c4b7350",
+      "paths": [
+        "README.md",
+        "docs/api.md",
+        "docs/architecture.md",
+        "docs/compatibility.md",
+        "docs/quickstart.md",
+        "kitteng2p/__init__.py",
+        "kitteng2p/api.py",
+        "kitteng2p/config.py",
+        "kitteng2p/context.py",
+        "kitteng2p/lexicons.py",
+        "kitteng2p/types.py",
+        "pyproject.toml",
+        "tests/fixtures/heteronym_evaluation.json",
+        "tests/test_config.py",
+        "tests/test_g2lex_sources.py",
+        "tests/test_heteronym_context.py",
+        "tests/test_lexicon_discovery.py",
+        "tests/test_pronunciation_overrides.py"
+      ],
+      "sha": "5746236b6f7c81af019ea368e7d895ccf639d213",
+      "short_sha": "5746236",
+      "source_ref": "git:5746236b6f7c81af019ea368e7d895ccf639d213"
+    }
+  ],
+  "git_base_ref": "1d3c930d348920035af93544d673e2ca05dc9430",
+  "git_base_sha": "1d3c930d348920035af93544d673e2ca05dc9430",
+  "git_head_ref": "5746236b6f7c81af019ea368e7d895ccf639d213",
+  "git_head_sha": "5746236b6f7c81af019ea368e7d895ccf639d213",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "0.1.2",
+  "schema_version": 1
+}

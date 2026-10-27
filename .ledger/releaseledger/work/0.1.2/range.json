@@ -1,0 +1,13 @@
+{
+  "base_ref": "1d3c930d348920035af93544d673e2ca05dc9430",
+  "base_sha": "1d3c930d348920035af93544d673e2ca05dc9430",
+  "candidate_count": 1,
+  "commit_count": 1,
+  "head_ref": "5746236b6f7c81af019ea368e7d895ccf639d213",
+  "head_sha": "5746236b6f7c81af019ea368e7d895ccf639d213",
+  "include_merges": "nontrivial",
+  "kind": "git_range_summary",
+  "merge_commit_count": 0,
+  "merge_commits_skipped": 0,
+  "range": "1d3c930d348920035af93544d673e2ca05dc9430..5746236b6f7c81af019ea368e7d895ccf639d213"
+}

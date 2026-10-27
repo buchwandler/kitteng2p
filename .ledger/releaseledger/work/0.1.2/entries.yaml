@@ -1,0 +1,50 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: 0.1.2
+git_base_ref: 1d3c930d348920035af93544d673e2ca05dc9430
+git_base_sha: 1d3c930d348920035af93544d673e2ca05dc9430
+git_head_ref: 5746236b6f7c81af019ea368e7d895ccf639d213
+git_head_sha: 5746236b6f7c81af019ea368e7d895ccf639d213
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: "Added opt-in local and named G2Lex pronunciation sources with IPA validation and lexicon discovery"
+    body: "Callers can select local or named pronunciation sources, inspect available lexicons, pin source hashes, and retain deterministic source precedence without changing the default eSpeak path."
+    status: accepted
+    source_refs:
+      - git:5746236b6f7c81af019ea368e7d895ccf639d213
+    paths:
+      - kitteng2p/config.py
+      - kitteng2p/lexicons.py
+      - kitteng2p/__init__.py
+      - docs/api.md
+      - docs/quickstart.md
+      - pyproject.toml
+    sources:
+      - git:5746236b6f7c81af019ea368e7d895ccf639d213
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: "Added contextual pronunciation overrides, heteronym resolution, and traceable pronunciation diagnostics"
+    body: "Request-local IPA spans and supported contextual rules now participate in pronunciation selection, while results expose source traces and diagnostics for inspection."
+    status: accepted
+    source_refs: []
+    paths:
+      - kitteng2p/api.py
+      - kitteng2p/context.py
+      - kitteng2p/types.py
+      - docs/architecture.md
+      - docs/compatibility.md
+      - tests/test_g2lex_sources.py
+      - tests/test_heteronym_context.py
+      - tests/test_pronunciation_overrides.py
+    sources:
+      - git:5746236b6f7c81af019ea368e7d895ccf639d213
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
